@@ -1,0 +1,11 @@
+# Secrets
+.env
+
+# Local working notes
+spec.md
+dev.md
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
