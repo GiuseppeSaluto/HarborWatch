@@ -1,6 +1,6 @@
 import pytest
 
-from classify import classify, distance_to_coast_m
+from classify import classify, distance_to_coast_m, ship_category
 from config import QUAY_DISTANCE_M, SPEED_THRESHOLD_KN
 
 ANCHORED, MOORED, UNDERWAY = 1, 5, 0
@@ -30,3 +30,15 @@ def test_real_coastline():
     # Positions from the recorded stream: COSTA TOSCANA (moored) and HS AYSE ANA (at anchor).
     assert distance_to_coast_m(8.91758, 44.4112) < QUAY_DISTANCE_M
     assert distance_to_coast_m(8.84677, 44.39967) > 500
+
+
+@pytest.mark.parametrize("ship_type, expected", [
+    (None, "unknown"), (0, "unknown"),
+    (70, "cargo"), (79, "cargo"), (80, "tanker"), (89, "tanker"),
+    (60, "passenger"), (40, "passenger"),
+    (37, "pleasure"), (36, "pleasure"),
+    (52, "service"), (50, "service"), (30, "service"),
+    (90, "other"), (20, "other"),
+])
+def test_ship_category(ship_type, expected):
+    assert ship_category(ship_type) == expected

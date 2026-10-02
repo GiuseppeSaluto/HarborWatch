@@ -24,7 +24,8 @@ def test_ship_static_data():
     collection, doc = parse(STATIC)
     assert collection == "vessels"
     assert doc == {"mmsi": 319883000, "name": "ARIELA", "imo": 1010818,
-                   "length": 55, "beam": 9, "destination": "GENOVA"}
+                   "length": 55, "beam": 9, "destination": "GENOVA",
+                   "ship_type": 37}  # pleasure craft: a superyacht
 
 
 def test_discards_invalid():

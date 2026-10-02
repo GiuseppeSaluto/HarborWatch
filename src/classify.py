@@ -1,4 +1,4 @@
-"""Pure function: vessel state (at_berth, anchored, underway)."""
+"""Pure functions: vessel state (at_berth, anchored, underway) and ship category."""
 
 import math
 
@@ -36,3 +36,24 @@ def classify(sog, nav_status, dist_to_quay_m):
         return "at_berth"
     # Every message comes from the port bounding box, so slow and off the quay = anchorage.
     return "anchored"
+
+
+# Categories that make up port congestion; the rest (tugs, pilots, yachts...) is port life.
+COMMERCIAL = {"cargo", "tanker", "passenger"}
+
+
+def ship_category(ship_type):
+    """Group the AIS ship type code (ITU-R M.1371, first digit = family) into a category."""
+    if not ship_type:
+        return "unknown"  # no ShipStaticData received yet, or the vessel sends 0
+    if 70 <= ship_type <= 79:
+        return "cargo"
+    if 80 <= ship_type <= 89:
+        return "tanker"
+    if 60 <= ship_type <= 69 or 40 <= ship_type <= 49:  # 40-49: high speed craft, mostly fast ferries
+        return "passenger"
+    if ship_type in (36, 37):  # sailing, pleasure craft: superyachts declare these
+        return "pleasure"
+    if 30 <= ship_type <= 35 or 50 <= ship_type <= 59:  # fishing, towing, pilot, tug, SAR, police...
+        return "service"
+    return "other"

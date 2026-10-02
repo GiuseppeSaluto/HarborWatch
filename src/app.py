@@ -7,6 +7,7 @@ import streamlit as st
 from pymongo import MongoClient
 
 import config
+from classify import COMMERCIAL, ship_category
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
 COLORS = {"at_berth": "#2e7d32", "anchored": "#ef6c00", "underway": "#1565c0"}
@@ -32,6 +33,7 @@ def load_states(db, now):
             "name": {"$first": "$vessel.name"},  # missing until a ShipStaticData arrives
             "length": {"$first": "$vessel.length"},
             "destination": {"$first": "$vessel.destination"},
+            "ship_type": {"$ifNull": [{"$first": "$vessel.ship_type"}, 0]},  # 0 = unknown
         }},
     ])
     return pd.DataFrame(list(rows))
@@ -54,6 +56,12 @@ def dashboard():
         st.warning(f"No vessel heard from in the last {config.STALE_MINUTES} minutes: is ingest.py running?")
         return
 
+    df["type"] = df["ship_type"].map(ship_category)
+    heard = len(df)
+    if st.toggle("Commercial vessels only (cargo, tanker, passenger)", value=True):
+        df = df[df["type"].isin(COMMERCIAL)]
+    hidden = heard - len(df)
+
     # ponytail: `since` is the first time *we* saw the vessel in this state, so vessels
     # already at anchor when the ingestion started show a shorter wait than the real one.
     anchored = df[df["state"] == "anchored"].assign(wait=lambda d: now - pd.to_datetime(d["since"], utc=True))
@@ -74,10 +82,11 @@ def dashboard():
     else:
         st.dataframe(
             anchored.sort_values("wait", ascending=False)
-            .assign(wait=lambda d: d["wait"].map(fmt))[["name", "mmsi", "length", "destination", "wait"]],
+            .assign(wait=lambda d: d["wait"].map(fmt))[["name", "mmsi", "type", "length", "destination", "wait"]],
             hide_index=True,
         )
     st.caption(f"Updated {now:%H:%M:%S} UTC · vessels heard from in the last {config.STALE_MINUTES} min · "
+               f"{hidden} hidden (tugs, yachts, service craft, or type not received yet) · "
                "map © OpenStreetMap contributors")
 
 

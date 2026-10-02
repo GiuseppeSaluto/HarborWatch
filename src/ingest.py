@@ -61,6 +61,7 @@ def parse(msg):
             "length": length or None,
             "beam": beam or None,
             "destination": body.get("Destination", "").strip() or None,
+            "ship_type": body.get("Type") or None,  # AIS ship type code, 0 = not available
         }
 
     return None
