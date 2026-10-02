@@ -1,13 +1,8 @@
 import copy
 import json
-import os
 from pathlib import Path
 
-# parse() needs no secrets, but importing ingest loads config, which requires them.
-os.environ.setdefault("AISSTREAM_API_KEY", "test")
-os.environ.setdefault("MONGODB_URI", "mongodb://test")
-
-from ingest import parse  # noqa: E402
+from ingest import parse
 
 MOORED, ANCHORED, UNDERWAY, STATIC = json.loads((Path(__file__).parent / "sample_messages.json").read_text())
 

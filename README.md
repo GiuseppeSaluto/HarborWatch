@@ -21,3 +21,7 @@ streamlit run src/app.py
 ## Status
 
 Work in progress: phase 1 (congestion monitor).
+
+## Data
+
+`data/coastline.json` is the OpenStreetMap coastline around the port, © OpenStreetMap contributors, available under the [ODbL](https://www.openstreetmap.org/copyright).

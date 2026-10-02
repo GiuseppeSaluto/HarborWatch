@@ -1,6 +1,8 @@
 """Port, bounding box, berths, thresholds."""
 
+import json
 import os
+from pathlib import Path
 
 # Secrets come from the environment (.env, never committed).
 # os.environ[...] fails fast with a KeyError if a variable is missing.
@@ -19,3 +21,10 @@ SAMPLE_SECONDS = 60
 
 # TTL on the positions collection, to stay under the 512 MB of Atlas M0.
 POSITIONS_TTL_DAYS = 7
+
+# Vessel state thresholds (see classify.py).
+SPEED_THRESHOLD_KN = 0.5
+QUAY_DISTANCE_M = 100
+
+# OpenStreetMap coastline around the port: in Genoa it follows the quay edges.
+COASTLINE = json.loads((Path(__file__).parent.parent / "data" / "coastline.json").read_text())
