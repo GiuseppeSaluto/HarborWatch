@@ -1,0 +1,8 @@
+[server]
+# Skip Streamlit's first-run email prompt, which would block run.sh; open the printed URL.
+headless = true
+# Local only: on a public network the dashboard would otherwise be reachable by others.
+address = "localhost"
+
+[browser]
+gatherUsageStats = false

@@ -8,15 +8,15 @@ Real-time port congestion monitor for the Port of Genoa, built on AIS data (AISS
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env           # then fill in the values
-set -a && . ./.env && set +a   # load the variables into the shell
 ```
 
 ## Run
 
 ```bash
-python src/ingest.py
-streamlit run src/app.py
+./run.sh
 ```
+
+Starts the ingestion in the background and the dashboard at http://localhost:8501. Ctrl+C stops both.
 
 ## Status
 

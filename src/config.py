@@ -32,6 +32,10 @@ STORAGE_LIMIT_MB = 512
 STORAGE_WARN_RATIO = 0.8
 STATS_SECONDS = 600
 
+# Dashboard: vessels not heard from in this long are considered gone (left the area,
+# or AIS switched off). Moored and anchored vessels transmit every few minutes.
+STALE_MINUTES = 30
+
 # Vessel state thresholds (see classify.py).
 SPEED_THRESHOLD_KN = 0.5
 QUAY_DISTANCE_M = 100
