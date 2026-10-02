@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime
 
 import websockets
+from pymongo import ASCENDING, GEOSPHERE, MongoClient
 
 import config
 
@@ -53,9 +54,21 @@ def parse(msg):
     return None
 
 
+def ensure_indexes(db):
+    """Create the indexes if missing; safe to call on every start."""
+    db.positions.create_index([("location", GEOSPHERE)])
+    db.positions.create_index([("mmsi", ASCENDING), ("ts", ASCENDING)])
+    # TTL only works on a single-field index, hence ts appears twice.
+    db.positions.create_index("ts", expireAfterSeconds=config.POSITIONS_TTL_DAYS * 86400)
+    db.vessels.create_index("mmsi", unique=True)
+    db.states.create_index("mmsi", unique=True)
+
+
 async def main():
+    db = MongoClient(config.MONGODB_URI)[config.DB_NAME]
+    ensure_indexes(db)
+
     async with websockets.connect(AISSTREAM_URL) as ws:
-        
         await ws.send(json.dumps({
             "APIKey": config.AISSTREAM_API_KEY,
             "BoundingBoxes": [config.BOUNDING_BOX],  # a list of boxes
