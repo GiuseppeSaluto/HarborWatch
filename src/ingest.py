@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+import time
 from datetime import UTC, datetime
 
 import websockets
-from pymongo import ASCENDING, GEOSPHERE, MongoClient
+from pymongo import ASCENDING, GEOSPHERE, MongoClient, UpdateOne
 
 import config
+from classify import classify, distance_to_coast_m
 
 AISSTREAM_URL = "wss://stream.aisstream.io/v0/stream"
 
@@ -67,6 +69,40 @@ def keep_position(doc, last_saved):
     return True
 
 
+def state_fields(doc):
+    """Current-state fields for a kept position: classification plus where and when."""
+    lon, lat = doc["location"]["coordinates"]
+    return {
+        "mmsi": doc["mmsi"],
+        "state": classify(doc["sog"], doc["nav_status"], distance_to_coast_m(lon, lat)),
+        "ts": doc["ts"],
+        "location": doc["location"],
+        "sog": doc["sog"],
+    }
+
+
+def state_update(fields):
+    """Upsert the vessel state, keeping `since` while the state stays the same."""
+    # Pipeline update: "$state" and "$since" are the stored values before this update,
+    # so the state change check happens inside MongoDB and survives restarts.
+    since = {"$cond": [{"$eq": ["$state", fields["state"]]}, "$since", fields["ts"]]}
+    return UpdateOne({"mmsi": fields["mmsi"]}, [{"$set": {**fields, "since": since}}], upsert=True)
+
+
+def flush(db, positions, vessels, states):
+    """Write the buffers to MongoDB in a few batched calls, then empty them."""
+    if positions:
+        db.positions.insert_many(positions, ordered=False)
+    if vessels:
+        db.vessels.bulk_write(list(vessels.values()), ordered=False)
+    if states:
+        # ordered: two updates for the same vessel must apply in arrival order.
+        db.states.bulk_write(states, ordered=True)
+    positions.clear()
+    vessels.clear()
+    states.clear()
+
+
 def ensure_indexes(db):
     """Create the indexes if missing; safe to call on every start."""
     db.positions.create_index([("location", GEOSPHERE)])
@@ -87,8 +123,24 @@ async def main():
             "BoundingBoxes": [config.BOUNDING_BOX],  # a list of boxes
             "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
         }))
+        positions, vessels, states, last_saved = [], {}, [], {}
+        last_flush = time.monotonic()
         async for message in ws:
-            print(json.loads(message))
+            parsed = parse(json.loads(message))
+            if parsed:
+                collection, doc = parsed
+                if collection == "positions" and keep_position(doc, last_saved):
+                    positions.append(doc)
+                    states.append(state_update(state_fields(doc)))
+                elif collection == "vessels":
+                    # Dict keyed by mmsi: only the latest static data per vessel is written.
+                    vessels[doc["mmsi"]] = UpdateOne({"mmsi": doc["mmsi"]}, {"$set": doc}, upsert=True)
+            # ponytail: flush is checked only when a message arrives; fine for a busy port.
+            # Sync PyMongo blocks the event loop for the write, a few hundred ms every
+            # FLUSH_SECONDS. Upgrade path: asyncio.to_thread or PyMongo's async client.
+            if time.monotonic() - last_flush >= config.FLUSH_SECONDS:
+                flush(db, positions, vessels, states)
+                last_flush = time.monotonic()
 
 
 if __name__ == "__main__":

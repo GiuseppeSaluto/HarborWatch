@@ -4,7 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import config
-from ingest import keep_position, parse
+from ingest import keep_position, parse, state_fields
 
 MOORED, ANCHORED, UNDERWAY, STATIC = json.loads((Path(__file__).parent / "sample_messages.json").read_text())
 
@@ -47,3 +47,11 @@ def test_keep_position_samples_per_vessel():
     assert not keep_position(later(config.SAMPLE_SECONDS - 1), last_saved)
     assert keep_position(later(config.SAMPLE_SECONDS), last_saved)
     assert keep_position({**doc, "mmsi": doc["mmsi"] + 1}, last_saved)  # other vessels are independent
+
+
+def test_state_fields():
+    assert state_fields(parse(MOORED)[1])["state"] == "at_berth"
+    assert state_fields(parse(ANCHORED)[1])["state"] == "anchored"
+    fields = state_fields(parse(UNDERWAY)[1])
+    assert fields["state"] == "underway"
+    assert set(fields) == {"mmsi", "state", "ts", "location", "sog"}

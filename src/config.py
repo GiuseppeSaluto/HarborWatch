@@ -19,6 +19,9 @@ BOUNDING_BOX = [[44.33, 8.70], [44.46, 8.98]]
 # Keep at most one stored position per vessel every SAMPLE_SECONDS (Atlas M0 limits).
 SAMPLE_SECONDS = 60
 
+# Buffered writes go to MongoDB at most every FLUSH_SECONDS (Atlas M0: 100 ops/s).
+FLUSH_SECONDS = 10
+
 # TTL on the positions collection, to stay under the 512 MB of Atlas M0.
 POSITIONS_TTL_DAYS = 7
 
