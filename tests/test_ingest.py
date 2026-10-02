@@ -1,8 +1,10 @@
 import copy
 import json
+from datetime import timedelta
 from pathlib import Path
 
-from ingest import parse
+import config
+from ingest import keep_position, parse
 
 MOORED, ANCHORED, UNDERWAY, STATIC = json.loads((Path(__file__).parent / "sample_messages.json").read_text())
 
@@ -34,3 +36,14 @@ def test_discards_invalid():
     del msg["MetaData"]["MMSI"]
     assert parse(msg) is None
     assert parse({"MessageType": "SubscriptionConfirmation", "Message": {}}) is None
+
+
+def test_keep_position_samples_per_vessel():
+    last_saved = {}
+    doc = parse(MOORED)[1]
+    later = lambda seconds: {**doc, "ts": doc["ts"] + timedelta(seconds=seconds)}
+    assert keep_position(doc, last_saved)
+    assert not keep_position(doc, last_saved)  # duplicate
+    assert not keep_position(later(config.SAMPLE_SECONDS - 1), last_saved)
+    assert keep_position(later(config.SAMPLE_SECONDS), last_saved)
+    assert keep_position({**doc, "mmsi": doc["mmsi"] + 1}, last_saved)  # other vessels are independent

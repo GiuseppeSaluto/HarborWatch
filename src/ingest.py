@@ -54,6 +54,19 @@ def parse(msg):
     return None
 
 
+def keep_position(doc, last_saved):
+    """True if at least SAMPLE_SECONDS passed since this vessel's last kept position.
+
+    last_saved maps mmsi -> ts of the last kept position and is updated in place.
+    Uses the AIS timestamp, not the wall clock, so late or duplicate messages are dropped too.
+    """
+    last = last_saved.get(doc["mmsi"])
+    if last is not None and (doc["ts"] - last).total_seconds() < config.SAMPLE_SECONDS:
+        return False
+    last_saved[doc["mmsi"]] = doc["ts"]
+    return True
+
+
 def ensure_indexes(db):
     """Create the indexes if missing; safe to call on every start."""
     db.positions.create_index([("location", GEOSPHERE)])
