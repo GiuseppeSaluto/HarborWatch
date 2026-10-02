@@ -25,6 +25,13 @@ FLUSH_SECONDS = 10
 # TTL on the positions collection, to stay under the 512 MB of Atlas M0.
 POSITIONS_TTL_DAYS = 7
 
+# Storage check: Atlas M0 allows 512 MB, indexes included. A warning is logged when the
+# current or projected size goes over STORAGE_WARN_RATIO of it; the fix is a lower
+# POSITIONS_TTL_DAYS or a higher SAMPLE_SECONDS, then a restart.
+STORAGE_LIMIT_MB = 512
+STORAGE_WARN_RATIO = 0.8
+STATS_SECONDS = 600
+
 # Vessel state thresholds (see classify.py).
 SPEED_THRESHOLD_KN = 0.5
 QUAY_DISTANCE_M = 100

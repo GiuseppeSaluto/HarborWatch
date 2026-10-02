@@ -3,9 +3,10 @@
 import asyncio
 import json
 import logging
+import math
 import signal
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import websockets
 from pymongo import ASCENDING, GEOSPHERE, MongoClient, UpdateOne
@@ -122,9 +123,33 @@ def ensure_indexes(db):
     db.positions.create_index([("location", GEOSPHERE)])
     db.positions.create_index([("mmsi", ASCENDING), ("ts", ASCENDING)])
     # TTL only works on a single-field index, hence ts appears twice.
-    db.positions.create_index("ts", expireAfterSeconds=config.POSITIONS_TTL_DAYS * 86400)
+    ttl = config.POSITIONS_TTL_DAYS * 86400
+    current = db.positions.index_information().get("ts_1")
+    if current and current.get("expireAfterSeconds") != ttl:
+        # create_index can't change options of an existing index (IndexOptionsConflict),
+        # and collMod needs dbAdmin, which our readWrite Atlas user lacks: drop and rebuild.
+        db.positions.drop_index("ts_1")
+        log.info("positions TTL changed to %d days", config.POSITIONS_TTL_DAYS)
+    db.positions.create_index("ts", expireAfterSeconds=ttl)
     db.vessels.create_index("mmsi", unique=True)
     db.states.create_index("mmsi", unique=True)
+
+
+def log_storage(db):
+    """Log used storage and a projection of where the TTL will make it settle."""
+    stats = db.command("dbStats")
+    used = stats["dataSize"] + stats["indexSize"]
+    total = db.positions.estimated_document_count()
+    last_day = db.positions.count_documents({"ts": {"$gte": datetime.now(UTC) - timedelta(days=1)}})
+    # With the TTL, positions settle at about last_day * TTL days. Scaling the whole
+    # database by that ratio overestimates at first (fixed index overhead), then converges.
+    # During the first day last_day is incomplete, so the projection is still low.
+    projected = used / total * last_day * config.POSITIONS_TTL_DAYS if total else used
+    limit = config.STORAGE_LIMIT_MB * 1024 * 1024
+    level = logging.WARNING if max(used, projected) > limit * config.STORAGE_WARN_RATIO else logging.INFO
+    log.log(level, "storage %.1f MB of %d (%.0f%%), projected %.1f MB at %d days TTL; %d positions, %d in the last 24 h",
+            used / 2**20, config.STORAGE_LIMIT_MB, 100 * used / limit,
+            projected / 2**20, config.POSITIONS_TTL_DAYS, total, last_day)
 
 
 def safe_flush(db, positions, vessels, states):
@@ -146,6 +171,7 @@ async def main():
     # Outside the reconnect loop: buffers and sampling survive a dropped connection.
     positions, vessels, states, last_saved = [], {}, [], {}
     last_flush = time.monotonic()
+    last_stats = -math.inf  # log storage at the first flush
     try:
         # Iterating over connect() reconnects automatically on network errors.
         async for ws in websockets.connect(AISSTREAM_URL):
@@ -175,6 +201,12 @@ async def main():
                     if time.monotonic() - last_flush >= config.FLUSH_SECONDS:
                         safe_flush(db, positions, vessels, states)
                         last_flush = time.monotonic()
+                        if last_flush - last_stats >= config.STATS_SECONDS:
+                            try:
+                                log_storage(db)
+                            except PyMongoError as exc:
+                                log.warning("storage check failed: %s", exc)
+                            last_stats = last_flush
             except websockets.ConnectionClosed as exc:
                 log.warning("connection closed (%s), reconnecting in %d s", exc, RECONNECT_DELAY_S)
             # Also reached when the server closes cleanly and the inner loop just ends.
