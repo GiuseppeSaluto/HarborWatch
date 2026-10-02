@@ -1,0 +1,139 @@
+[
+  {
+    "MetaData": {
+      "MMSI": 247431200,
+      "MMSI_String": 247431200,
+      "ShipName": "COSTA TOSCANA",
+      "latitude": 44.4112,
+      "longitude": 8.91758,
+      "time_utc": "2026-10-02 10:18:53.31448258 +0000 UTC"
+    },
+    "MessageType": "PositionReport",
+    "Message": {
+      "PositionReport": {
+        "MessageID": 3,
+        "RepeatIndicator": 0,
+        "UserID": 247431200,
+        "Valid": true,
+        "NavigationalStatus": 5,
+        "RateOfTurn": 0,
+        "Sog": 0,
+        "PositionAccuracy": true,
+        "Longitude": 8.917581666666667,
+        "Latitude": 44.41119833333333,
+        "Cog": 178.9,
+        "TrueHeading": 179,
+        "Timestamp": 52,
+        "SpecialManoeuvreIndicator": 0,
+        "Spare": 2,
+        "Raim": false,
+        "CommunicationState": 84634
+      }
+    }
+  },
+  {
+    "MetaData": {
+      "MMSI": 538012010,
+      "MMSI_String": 538012010,
+      "ShipName": "HS AYSE ANA         ",
+      "latitude": 44.39967,
+      "longitude": 8.84677,
+      "time_utc": "2026-10-02 10:18:49.933591655 +0000 UTC"
+    },
+    "MessageType": "PositionReport",
+    "Message": {
+      "PositionReport": {
+        "MessageID": 3,
+        "RepeatIndicator": 0,
+        "UserID": 538012010,
+        "Valid": true,
+        "NavigationalStatus": 1,
+        "RateOfTurn": 0,
+        "Sog": 0.1,
+        "PositionAccuracy": false,
+        "Longitude": 8.846766666666667,
+        "Latitude": 44.39967,
+        "Cog": 250.9,
+        "TrueHeading": 83,
+        "Timestamp": 49,
+        "SpecialManoeuvreIndicator": 0,
+        "Spare": 0,
+        "Raim": false,
+        "CommunicationState": 215578
+      }
+    }
+  },
+  {
+    "MetaData": {
+      "MMSI": 247059400,
+      "MMSI_String": 247059400,
+      "ShipName": "GIANEMILIO C        ",
+      "latitude": 44.39313,
+      "longitude": 8.90945,
+      "time_utc": "2026-10-02 10:19:29.420579421 +0000 UTC"
+    },
+    "MessageType": "PositionReport",
+    "Message": {
+      "PositionReport": {
+        "MessageID": 1,
+        "RepeatIndicator": 0,
+        "UserID": 247059400,
+        "Valid": true,
+        "NavigationalStatus": 0,
+        "RateOfTurn": -128,
+        "Sog": 1.1,
+        "PositionAccuracy": false,
+        "Longitude": 8.90945,
+        "Latitude": 44.39313333333334,
+        "Cog": 32,
+        "TrueHeading": 511,
+        "Timestamp": 28,
+        "SpecialManoeuvreIndicator": 0,
+        "Spare": 0,
+        "Raim": false,
+        "CommunicationState": 66637
+      }
+    }
+  },
+  {
+    "MetaData": {
+      "MMSI": 319883000,
+      "MMSI_String": 319883000,
+      "ShipName": "ARIELA",
+      "latitude": 44.41631,
+      "longitude": 8.83825,
+      "time_utc": "2026-10-02 10:18:54.716882825 +0000 UTC"
+    },
+    "MessageType": "ShipStaticData",
+    "Message": {
+      "ShipStaticData": {
+        "AisVersion": 2,
+        "CallSign": "ZGBD3",
+        "Destination": "GENOVA",
+        "Dimension": {
+          "A": 21,
+          "B": 34,
+          "C": 2,
+          "D": 7
+        },
+        "Dte": false,
+        "Eta": {
+          "Day": 0,
+          "Hour": 24,
+          "Minute": 60,
+          "Month": 0
+        },
+        "FixType": 1,
+        "ImoNumber": 1010818,
+        "MaximumStaticDraught": 3.3,
+        "MessageID": 5,
+        "Name": "ARIELA",
+        "RepeatIndicator": 0,
+        "Spare": false,
+        "Type": 37,
+        "UserID": 319883000,
+        "Valid": true
+      }
+    }
+  }
+]
