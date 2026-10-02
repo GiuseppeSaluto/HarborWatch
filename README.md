@@ -16,7 +16,6 @@ set -a && . ./.env && set +a   # load the variables into the shell
 ```bash
 python src/ingest.py
 streamlit run src/app.py
-pytest
 ```
 
 ## Status
