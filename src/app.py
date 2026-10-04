@@ -8,6 +8,7 @@ from pymongo import MongoClient
 
 import config
 from classify import COMMERCIAL, ship_category
+from optimize import plan_berths, prepare
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
 COLORS = {"at_berth": "#2e7d32", "anchored": "#ef6c00", "underway": "#1565c0"}
@@ -57,6 +58,7 @@ def dashboard():
         return
 
     df["type"] = df["ship_type"].map(ship_category)
+    everyone = df  # the berth plan needs every moored vessel, whatever the toggle says
     heard = len(df)
     if st.toggle("Commercial vessels only (cargo, tanker, passenger)", value=True):
         df = df[df["type"].isin(COMMERCIAL)]
@@ -85,9 +87,35 @@ def dashboard():
             .assign(wait=lambda d: d["wait"].map(fmt))[["name", "mmsi", "type", "length", "destination", "wait"]],
             hide_index=True,
         )
+    berth_plan(everyone, now)
+
     st.caption(f"Updated {now:%H:%M:%S} UTC · vessels heard from in the last {config.STALE_MINUTES} min · "
                f"{hidden} hidden (tugs, yachts, service craft, or type not received yet) · "
                "map © OpenStreetMap contributors")
+
+
+def berth_plan(df, now):
+    """Phase 2: proposed berth and start time for every commercial vessel at anchor."""
+    st.subheader("Proposed berth plan")
+    rows = df.astype(object).where(df.notna(), None)  # NaN (unknown length, name) -> None
+    states = [{"name": r["name"] or str(r["mmsi"]), "state": r["state"], "category": r["type"],
+               "length": r["length"], "since": r["since"], "location": [r["lon"], r["lat"]]}
+              for _, r in rows.iterrows()]
+    vessels, berths = prepare(states, config.BERTHS, now)
+    plan = plan_berths(vessels, berths)
+    if not plan:
+        st.write("No commercial vessel at anchor that fits a known berth.")
+        return
+    st.dataframe(pd.DataFrame([{
+        "vessel": p["vessel"], "berth": p["berth"],
+        "moors at (UTC)": f"{now + timedelta(minutes=p['start']):%a %H:%M}",
+        "more wait": fmt(timedelta(minutes=p["wait"])),
+    } for p in plan]), hide_index=True)
+    busy = sum(1 for b in berths if b["free_from"])
+    st.caption(f"Minimizes the total wait over {len(berths)} berths ({busy} busy now) in data/berths.json. "
+               "Stays are per-category defaults (" +
+               ", ".join(f"{c} {m // 60} h" for c, m in config.SERVICE_MINUTES.items()) + "), "
+               "counted from when we first saw each vessel moored.")
 
 
 dashboard()

@@ -46,3 +46,7 @@ COASTLINE = json.loads((Path(__file__).parent.parent / "data" / "coastline.json"
 # Phase 2: one entry per berth (a quay stretch hosting one vessel at a time), with the
 # vessel categories it accepts. "source" says whether numbers are official or observed.
 BERTHS = json.loads((Path(__file__).parent.parent / "data" / "berths.json").read_text())
+
+# Expected stay at berth per category, until it can be measured from history (spec section 9).
+# ponytail: rough defaults; container and ro-ro calls are often shorter, tankers longer.
+SERVICE_MINUTES = {"cargo": 24 * 60, "tanker": 36 * 60, "passenger": 12 * 60}
