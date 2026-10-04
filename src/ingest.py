@@ -94,9 +94,11 @@ def state_fields(doc):
 
 def state_update(fields):
     """Upsert the vessel state, keeping `since` while the state stays the same."""
-    # Pipeline update: "$state" and "$since" are the stored values before this update,
-    # so the state change check happens inside MongoDB and survives restarts.
-    since = {"$cond": [{"$eq": ["$state", fields["state"]]}, "$since", fields["ts"]]}
+    # Pipeline update: "$state", "$since" and "$ts" are the stored values before this
+    # update, so the check happens inside MongoDB and survives restarts.
+    recent = {"$gte": ["$ts", fields["ts"] - timedelta(minutes=config.STALE_MINUTES)]}
+    same = {"$and": [{"$eq": ["$state", fields["state"]]}, recent]}
+    since = {"$cond": [same, "$since", fields["ts"]]}
     return UpdateOne({"mmsi": fields["mmsi"]}, [{"$set": {**fields, "since": since}}], upsert=True)
 
 
