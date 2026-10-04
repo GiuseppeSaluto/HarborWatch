@@ -1,5 +1,7 @@
 # HarborWatch
 
+[![tests](https://github.com/GiuseppeSaluto/HarborWatch/actions/workflows/tests.yml/badge.svg)](https://github.com/GiuseppeSaluto/HarborWatch/actions/workflows/tests.yml)
+
 Real-time port congestion monitor for the Port of Genoa, built on AIS data (AISStream + MongoDB Atlas + Streamlit), evolving into a berth allocation optimizer.
 
 ## Setup

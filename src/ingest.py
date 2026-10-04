@@ -9,7 +9,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import websockets
-from pymongo import ASCENDING, GEOSPHERE, MongoClient, UpdateOne
+from pymongo import ASCENDING, GEOSPHERE, AsyncMongoClient, UpdateOne
 from pymongo.errors import PyMongoError
 
 import config
@@ -102,7 +102,7 @@ def state_update(fields):
     return UpdateOne({"mmsi": fields["mmsi"]}, [{"$set": {**fields, "since": since}}], upsert=True)
 
 
-def flush(db, positions, vessels, states):
+async def flush(db, positions, vessels, states):
     """Write the buffers to MongoDB in a few batched calls, emptying each one once written.
 
     If a write fails, the buffers not yet written are kept and retried at the next flush.
@@ -110,40 +110,40 @@ def flush(db, positions, vessels, states):
     if positions:
         # ponytail: a partial failure here (rare: retryable writes cover network blips)
         # would re-insert the already written docs next time and hit duplicate _id errors.
-        db.positions.insert_many(positions, ordered=False)
+        await db.positions.insert_many(positions, ordered=False)
         positions.clear()
     if vessels:
-        db.vessels.bulk_write(list(vessels.values()), ordered=False)
+        await db.vessels.bulk_write(list(vessels.values()), ordered=False)
         vessels.clear()
     if states:
         # ordered: two updates for the same vessel must apply in arrival order.
-        db.states.bulk_write(states, ordered=True)
+        await db.states.bulk_write(states, ordered=True)
         states.clear()
 
 
-def ensure_indexes(db):
+async def ensure_indexes(db):
     """Create the indexes if missing; safe to call on every start."""
-    db.positions.create_index([("location", GEOSPHERE)])
-    db.positions.create_index([("mmsi", ASCENDING), ("ts", ASCENDING)])
+    await db.positions.create_index([("location", GEOSPHERE)])
+    await db.positions.create_index([("mmsi", ASCENDING), ("ts", ASCENDING)])
     # TTL only works on a single-field index, hence ts appears twice.
     ttl = config.POSITIONS_TTL_DAYS * 86400
-    current = db.positions.index_information().get("ts_1")
+    current = (await db.positions.index_information()).get("ts_1")
     if current and current.get("expireAfterSeconds") != ttl:
         # create_index can't change options of an existing index (IndexOptionsConflict),
         # and collMod needs dbAdmin, which our readWrite Atlas user lacks: drop and rebuild.
-        db.positions.drop_index("ts_1")
+        await db.positions.drop_index("ts_1")
         log.info("positions TTL changed to %d days", config.POSITIONS_TTL_DAYS)
-    db.positions.create_index("ts", expireAfterSeconds=ttl)
-    db.vessels.create_index("mmsi", unique=True)
-    db.states.create_index("mmsi", unique=True)
+    await db.positions.create_index("ts", expireAfterSeconds=ttl)
+    await db.vessels.create_index("mmsi", unique=True)
+    await db.states.create_index("mmsi", unique=True)
 
 
-def log_storage(db):
+async def log_storage(db):
     """Log used storage and a projection of where the TTL will make it settle."""
-    stats = db.command("dbStats")
+    stats = await db.command("dbStats")
     used = stats["dataSize"] + stats["indexSize"]
-    total = db.positions.estimated_document_count()
-    last_day = db.positions.count_documents({"ts": {"$gte": datetime.now(UTC) - timedelta(days=1)}})
+    total = await db.positions.estimated_document_count()
+    last_day = await db.positions.count_documents({"ts": {"$gte": datetime.now(UTC) - timedelta(days=1)}})
     # With the TTL, positions settle at about last_day * TTL days. Scaling the whole
     # database by that ratio overestimates at first (fixed index overhead), then converges.
     # During the first day last_day is incomplete, so the projection is still low.
@@ -155,17 +155,18 @@ def log_storage(db):
             projected / 2**20, config.POSITIONS_TTL_DAYS, total, last_day)
 
 
-def safe_flush(db, positions, vessels, states):
+async def safe_flush(db, positions, vessels, states):
     """flush(), but a MongoDB outage is logged instead of stopping the ingestion."""
     try:
-        flush(db, positions, vessels, states)
+        await flush(db, positions, vessels, states)
     except PyMongoError as exc:
         log.warning("flush failed, keeping %d positions in memory: %s", len(positions), exc)
 
 
 async def main():
-    db = MongoClient(config.MONGODB_URI)[config.DB_NAME]
-    ensure_indexes(db)
+    client = AsyncMongoClient(config.MONGODB_URI)
+    db = client[config.DB_NAME]
+    await ensure_indexes(db)
 
     # systemd, docker and `timeout` stop a process with SIGTERM: treat it like Ctrl+C,
     # so the finally block below still writes the buffers. (Unix only.)
@@ -199,14 +200,14 @@ async def main():
                             # Dict keyed by mmsi: only the latest static data per vessel is written.
                             vessels[doc["mmsi"]] = UpdateOne({"mmsi": doc["mmsi"]}, {"$set": doc}, upsert=True)
                     # ponytail: flush is checked only when a message arrives; fine for a busy port.
-                    # Sync PyMongo blocks the event loop for the write, a few hundred ms every
-                    # FLUSH_SECONDS. Upgrade path: asyncio.to_thread or PyMongo's async client.
+                    # Awaiting it here keeps the buffers single-writer; incoming messages just
+                    # queue in the websocket meanwhile.
                     if time.monotonic() - last_flush >= config.FLUSH_SECONDS:
-                        safe_flush(db, positions, vessels, states)
+                        await safe_flush(db, positions, vessels, states)
                         last_flush = time.monotonic()
                         if last_flush - last_stats >= config.STATS_SECONDS:
                             try:
-                                log_storage(db)
+                                await log_storage(db)
                             except PyMongoError as exc:
                                 log.warning("storage check failed: %s", exc)
                             last_stats = last_flush
@@ -217,7 +218,8 @@ async def main():
     finally:
         # Ctrl+C or SIGTERM: write what is still in memory before exiting.
         log.info("shutting down, final flush")
-        safe_flush(db, positions, vessels, states)
+        await safe_flush(db, positions, vessels, states)
+        await client.close()
 
 
 if __name__ == "__main__":
