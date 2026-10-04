@@ -1,4 +1,5 @@
 pymongo>=4.13
 websockets>=14
 streamlit
+ortools
 pytest
