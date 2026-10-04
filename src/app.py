@@ -8,7 +8,7 @@ from pymongo import MongoClient
 
 import config
 from classify import COMMERCIAL, ship_category
-from optimize import plan_berths, prepare
+from optimize import measure_stays, plan_berths, prepare, service_minutes
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
 COLORS = {"at_berth": "#2e7d32", "anchored": "#ef6c00", "underway": "#1565c0"}
@@ -94,6 +94,19 @@ def dashboard():
                "map © OpenStreetMap contributors")
 
 
+@st.cache_data(ttl=3600)  # a week of positions: recompute hourly, not every minute
+def stay_estimates():
+    """Expected stay per category, measured from the position history where possible."""
+    db = get_db()
+    # ponytail: reads every position with a state (up to ~300k at a 7-day TTL) once an hour.
+    # Upgrade path: an aggregation pipeline, or storing stays as the ingestion sees them end.
+    positions = list(db.positions.find({"state": {"$exists": True}}, {"_id": 0, "mmsi": 1, "ts": 1, "state": 1})
+                     .sort([("mmsi", 1), ("ts", 1)]))
+    category_of = {v["mmsi"]: ship_category(v.get("ship_type")) for v in db.vessels.find({}, {"mmsi": 1, "ship_type": 1})}
+    stays = measure_stays(positions, config.STALE_MINUTES)
+    return service_minutes(stays, category_of, config.SERVICE_MINUTES, config.MIN_STAYS)
+
+
 def berth_plan(df, now):
     """Phase 2: proposed berth and start time for every commercial vessel at anchor."""
     st.subheader("Proposed berth plan")
@@ -101,7 +114,8 @@ def berth_plan(df, now):
     states = [{"name": r["name"] or str(r["mmsi"]), "state": r["state"], "category": r["type"],
                "length": r["length"], "since": r["since"], "location": [r["lon"], r["lat"]]}
               for _, r in rows.iterrows()]
-    vessels, berths = prepare(states, config.BERTHS, now)
+    service, counts = stay_estimates()
+    vessels, berths = prepare(states, config.BERTHS, now, service)
     plan = plan_berths(vessels, berths)
     if not plan:
         st.write("No commercial vessel at anchor that fits a known berth.")
@@ -113,9 +127,10 @@ def berth_plan(df, now):
     } for p in plan]), hide_index=True)
     busy = sum(1 for b in berths if b["free_from"])
     st.caption(f"Minimizes the total wait over {len(berths)} berths ({busy} busy now) in data/berths.json. "
-               "Stays are per-category defaults (" +
-               ", ".join(f"{c} {m // 60} h" for c, m in config.SERVICE_MINUTES.items()) + "), "
-               "counted from when we first saw each vessel moored.")
+               "Expected stays: " + ", ".join(
+                   f"{c} {m // 60} h " + (f"(median of {counts[c]} observed)" if counts[c] >= config.MIN_STAYS
+                                         else f"(default, {counts[c]} of {config.MIN_STAYS} stays observed)")
+                   for c, m in service.items()) + "; counted from when we first saw each vessel moored.")
 
 
 dashboard()

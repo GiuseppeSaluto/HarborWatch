@@ -194,8 +194,11 @@ async def main():
                     if parsed:
                         collection, doc = parsed
                         if collection == "positions" and keep_position(doc, last_saved):
-                            positions.append(doc)
-                            states.append(state_update(state_fields(doc)))
+                            fields = state_fields(doc)
+                            # The state in each position lets measure_stays read the history
+                            # without classifying it again.
+                            positions.append({**doc, "state": fields["state"]})
+                            states.append(state_update(fields))
                         elif collection == "vessels":
                             # Dict keyed by mmsi: only the latest static data per vessel is written.
                             vessels[doc["mmsi"]] = UpdateOne({"mmsi": doc["mmsi"]}, {"$set": doc}, upsert=True)

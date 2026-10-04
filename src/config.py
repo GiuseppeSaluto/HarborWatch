@@ -50,3 +50,5 @@ BERTHS = json.loads((Path(__file__).parent.parent / "data" / "berths.json").read
 # Expected stay at berth per category, until it can be measured from history (spec section 9).
 # ponytail: rough defaults; container and ro-ro calls are often shorter, tankers longer.
 SERVICE_MINUTES = {"cargo": 24 * 60, "tanker": 36 * 60, "passenger": 12 * 60}
+# Measured stays replace a default once a category has this many complete ones in history.
+MIN_STAYS = 5

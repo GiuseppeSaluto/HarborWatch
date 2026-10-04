@@ -1,6 +1,8 @@
 """Phase 2: berth allocation optimizer (OR-Tools CP-SAT)."""
 
+import itertools
 import math
+import statistics
 from datetime import timedelta
 
 from ortools.sat.python import cp_model
@@ -20,19 +22,65 @@ def fits(vessel, berth):
     return berth["length"] >= vessel["length"] and vessel["category"] in berth["accepts"]
 
 
-def prepare(states, berths, now):
+def measure_stays(positions, max_gap_minutes):
+    """Complete berth stays in a position history: (mmsi, start, end) for each.
+
+    positions: dicts with mmsi, ts and state, sorted by (mmsi, ts). A stay counts only if we
+    saw the vessel arrive and leave, with no gap over max_gap_minutes from the position
+    before it to the one after it; end is the first position after the berth.
+    """
+    gap = timedelta(minutes=max_gap_minutes)
+    stays = []
+    for mmsi, group in itertools.groupby(positions, key=lambda p: p["mmsi"]):
+        ps = list(group)
+        raw = [p["state"] for p in ps]
+        # A one-position blip (e.g. a moored vessel briefly over the speed threshold) is noise:
+        # it takes the state of its two neighbours when they agree.
+        state = [raw[i - 1] if 0 < i < len(raw) - 1 and raw[i - 1] == raw[i + 1] else raw[i]
+                 for i in range(len(raw))]
+        i = 0
+        while i < len(ps):
+            if state[i] != "at_berth":
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(ps) and state[j + 1] == "at_berth":
+                j += 1
+            window = ps[i - 1:j + 2] if i > 0 else []  # the run plus one position each side
+            if j + 1 < len(ps) and window and all(b["ts"] - a["ts"] <= gap for a, b in zip(window, window[1:])):
+                stays.append((mmsi, ps[i]["ts"], ps[j + 1]["ts"]))
+            i = j + 1
+    return stays
+
+
+def service_minutes(stays, category_of, defaults, min_stays):
+    """Median stay per category, in whole minutes, once a category has min_stays stays.
+
+    Returns (minutes, counts), both keyed like defaults; categories with too few stays keep
+    their default.
+    """
+    lengths = {category: [] for category in defaults}
+    for mmsi, start, end in stays:
+        if category_of.get(mmsi) in lengths:
+            lengths[category_of[mmsi]].append((end - start).total_seconds() / 60)
+    minutes = {c: int(statistics.median(ls)) if len(ls) >= min_stays else defaults[c] for c, ls in lengths.items()}
+    return minutes, {c: len(ls) for c, ls in lengths.items()}
+
+
+def prepare(states, berths, now, service=None):
     """Turn the current vessel states into plan_berths input.
 
     states: dicts with name, state, category, length (m or None), since (UTC datetime the
         vessel entered its state) and location ([lon, lat]).
     berths: as in data/berths.json. now: UTC datetime.
+    service: expected stay in minutes per category (from service_minutes), default config.SERVICE_MINUTES.
     Returns (vessels, berths): the commercial anchored vessels that fit some berth, waiting
-    from minute 0 with the default service time of their category; and copies of the berths
+    from minute 0 with the expected stay of their category; and copies of the berths
     with free_from, the minutes until the vessel moored there is expected to leave.
     """
-    # ponytail: service times are per-category defaults (spec section 9) and moored vessels
-    # are matched to the nearest compatible berth. Upgrade path: stays measured from history,
-    # and real berth geometries instead of one point per area.
+    # ponytail: one expected stay per category, and moored vessels are matched to the nearest
+    # compatible berth. Upgrade path: stays per vessel size or terminal, real berth geometries.
+    service = service or config.SERVICE_MINUTES
     known = [s for s in states if s["category"] in COMMERCIAL and s["length"]]
     berths = [{**b, "free_from": 0} for b in berths]
     occupied = set()
@@ -42,10 +90,10 @@ def prepare(states, berths, now):
             continue  # more vessels than berths we know of in that area
         berth = min(free, key=lambda b: math.dist(b["location"], s["location"]))
         occupied.add(berth["name"])
-        leaves = s["since"] + timedelta(minutes=config.SERVICE_MINUTES[s["category"]])
+        leaves = s["since"] + timedelta(minutes=service[s["category"]])
         berth["free_from"] = max(0, int((leaves - now).total_seconds() // 60))
     vessels = [{"name": s["name"], "length": s["length"], "category": s["category"],
-                "arrival": 0, "service": config.SERVICE_MINUTES[s["category"]]}
+                "arrival": 0, "service": service[s["category"]]}
                for s in known if s["state"] == "anchored" and any(fits(s, b) for b in berths)]
     return vessels, berths
 
