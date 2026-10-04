@@ -102,8 +102,10 @@ def stay_estimates():
     # Upgrade path: an aggregation pipeline, or storing stays as the ingestion sees them end.
     positions = list(db.positions.find({"state": {"$exists": True}}, {"_id": 0, "mmsi": 1, "ts": 1, "state": 1})
                      .sort([("mmsi", 1), ("ts", 1)]))
-    category_of = {v["mmsi"]: ship_category(v.get("ship_type")) for v in db.vessels.find({}, {"mmsi": 1, "ship_type": 1})}
-    stays = measure_stays(positions, config.STALE_MINUTES)
+    category_of = {v["mmsi"]: ship_category(v.get("ship_type"))
+                   for v in db.vessels.find({"length": {"$gte": config.MIN_STAY_VESSEL_M}}, {"mmsi": 1, "ship_type": 1})}
+    stays = [(m, start, end) for m, start, end in measure_stays(positions, config.STALE_MINUTES)
+             if end - start >= timedelta(minutes=config.MIN_STAY_MINUTES)]
     return service_minutes(stays, category_of, config.SERVICE_MINUTES, config.MIN_STAYS)
 
 
