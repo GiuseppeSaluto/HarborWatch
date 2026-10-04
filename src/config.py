@@ -42,3 +42,7 @@ QUAY_DISTANCE_M = 100
 
 # OpenStreetMap coastline around the port: in Genoa it follows the quay edges.
 COASTLINE = json.loads((Path(__file__).parent.parent / "data" / "coastline.json").read_text())
+
+# Phase 2: one entry per berth (a quay stretch hosting one vessel at a time), with the
+# vessel categories it accepts. "source" says whether numbers are official or observed.
+BERTHS = json.loads((Path(__file__).parent.parent / "data" / "berths.json").read_text())
