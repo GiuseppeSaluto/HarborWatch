@@ -39,7 +39,7 @@ def load_states(db, now):
         {"$match": {"ts": {"$gte": now - timedelta(minutes=config.STALE_MINUTES)}}},
         {"$lookup": {"from": "vessels", "localField": "mmsi", "foreignField": "mmsi", "as": "vessel"}},
         {"$project": {
-            "_id": 0, "mmsi": 1, "state": 1, "since": 1, "ts": 1, "sog": 1,
+            "_id": 0, "mmsi": 1, "state": 1, "since": 1, "since_seen": 1, "ts": 1, "sog": 1,
             "lon": {"$arrayElemAt": ["$location.coordinates", 0]},  # GeoJSON: [lon, lat]
             "lat": {"$arrayElemAt": ["$location.coordinates", 1]},
             "name": {"$first": "$vessel.name"},  # missing until a ShipStaticData arrives
@@ -161,7 +161,8 @@ def berth_plan(df, now):
     st.subheader("Proposed berth plan")
     rows = df.astype(object).where(df.notna(), None)  # NaN (unknown length, name) -> None
     states = [{"name": r["name"] or str(r["mmsi"]), "state": r["state"], "category": r["type"],
-               "length": r["length"], "since": r["since"], "location": [r["lon"], r["lat"]]}
+               "length": r["length"], "since": r["since"], "location": [r["lon"], r["lat"]],
+               "arrival_seen": r.get("since_seen") is True}  # missing (older documents) = not seen
               for _, r in rows.iterrows()]
     service, counts = stay_estimates()
     vessels, berths = prepare(states, config.BERTHS, now, service)
@@ -181,7 +182,7 @@ def berth_plan(df, now):
                "Expected stays: " + ", ".join(
                    f"{c} {m // 60} h " + (f"(median of {counts[c]} observed)" if counts[c] >= config.MIN_STAYS
                                          else f"(default, {counts[c]} of {config.MIN_STAYS} stays observed)")
-                   for c, m in service.items()) + "; counted from when we first saw each vessel moored.")
+                   for c, m in service.items()) + ". Vessels we did not see arrive are assumed halfway through their stay.")
 
 
 def data_status(now):

@@ -205,3 +205,46 @@ def test_prepare_berths_not_mutated_and_feed_plan_berths():
     assert "free_from" not in berths[0]
     [row] = plan_berths(vessels, out)
     assert (row["vessel"], row["start"]) == ("waiting", config.SERVICE_MINUTES["cargo"])
+
+
+# arrival_seen tests, also written by the test agent from the contract alone.
+ARRIVAL_NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
+ONE_BERTH = [{"name": "B1", "area": "A", "length": 400, "accepts": ["cargo", "tanker"],
+           "location": [8.9, 44.4], "source": "test"}]
+
+
+def moored_at(category, minutes_ago, **extra):
+    return dict(name="M", state="at_berth", category=category, length=200,
+                since=ARRIVAL_NOW - timedelta(minutes=minutes_ago), location=[8.9, 44.4], **extra)
+
+
+# Catches: arrival_seen ignored, absent key treated as False, or half the stay not clamped at 0.
+@pytest.mark.parametrize("category", ["cargo", "tanker"])
+@pytest.mark.parametrize("extra, fraction", [({}, 1), ({"arrival_seen": True}, 1), ({"arrival_seen": False}, 0.5)])
+@pytest.mark.parametrize("elapsed_of_half", [-60, 30])  # 60 min before / 30 min past the halfway point
+def test_free_from_full_or_half_stay(category, extra, fraction, elapsed_of_half):
+    full = config.SERVICE_MINUTES[category]
+    elapsed = full // 2 + elapsed_of_half
+    _, berths = prepare([moored_at(category, elapsed, **extra)], ONE_BERTH, ARRIVAL_NOW)
+    assert berths[0]["occupied_by"] == "M"
+    assert berths[0]["free_from"] == max(0, int(full * fraction) - elapsed)
+
+
+# Catches: halving config.SERVICE_MINUTES instead of the service dict passed to prepare.
+def test_custom_service_is_halved():
+    service = {c: m + 200 for c, m in config.SERVICE_MINUTES.items()}
+    _, berths = prepare([moored_at("cargo", 60, arrival_seen=False)], ONE_BERTH, ARRIVAL_NOW, service)
+    assert berths[0]["free_from"] == service["cargo"] // 2 - 60
+
+
+# Catches: arrival_seen=False leaking into anchored vessels (halved service or non-zero arrival).
+def test_anchored_vessel_unaffected():
+    def anchored(**extra):
+        return dict(name="A", state="anchored", category="cargo", length=200,
+                    since=ARRIVAL_NOW - timedelta(minutes=90), location=[8.8, 44.3], **extra)
+    base, _ = prepare([anchored()], ONE_BERTH, ARRIVAL_NOW)
+    unseen, _ = prepare([anchored(arrival_seen=False)], ONE_BERTH, ARRIVAL_NOW)
+    strip = lambda vs: [{k: v for k, v in x.items() if k != "arrival_seen"} for x in vs]
+    assert len(base) == 1
+    assert config.SERVICE_MINUTES["cargo"] in base[0].values()
+    assert strip(unseen) == strip(base)

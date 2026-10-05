@@ -71,7 +71,8 @@ def prepare(states, berths, now, service=None):
     """Turn the current vessel states into plan_berths input.
 
     states: dicts with name, state, category, length (m or None), since (UTC datetime the
-        vessel entered its state) and location ([lon, lat]).
+        vessel entered its state), location ([lon, lat]) and optionally arrival_seen
+        (default True; False when since is only when we first saw the vessel moored).
     berths: as in data/berths.json. now: UTC datetime.
     service: expected stay in minutes per category (from service_minutes), default config.SERVICE_MINUTES.
     Returns (vessels, berths): the commercial anchored vessels that fit some berth, waiting
@@ -92,7 +93,11 @@ def prepare(states, berths, now, service=None):
         berth = min(free, key=lambda b: math.dist(b["location"], s["location"]))
         occupied.add(berth["name"])
         berth["occupied_by"] = s["name"]
-        leaves = s["since"] + timedelta(minutes=service[s["category"]])
+        stay = service[s["category"]]
+        # Arrival not seen (e.g. moored before the ingestion started): assume it was halfway
+        # through its stay when we first saw it, instead of just arrived.
+        # ponytail: a coin-flip guess; the upgrade is reading the arrival from the history.
+        leaves = s["since"] + timedelta(minutes=stay if s.get("arrival_seen", True) else stay / 2)
         berth["free_from"] = max(0, int((leaves - now).total_seconds() // 60))
     vessels = [{"name": s["name"], "length": s["length"], "category": s["category"],
                 "arrival": 0, "service": service[s["category"]]}

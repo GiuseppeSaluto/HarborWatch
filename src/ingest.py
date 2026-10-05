@@ -93,13 +93,20 @@ def state_fields(doc):
 
 
 def state_update(fields):
-    """Upsert the vessel state, keeping `since` while the state stays the same."""
-    # Pipeline update: "$state", "$since" and "$ts" are the stored values before this
-    # update, so the check happens inside MongoDB and survives restarts.
+    """Upsert the vessel state, keeping `since` while the state stays the same.
+
+    since_seen tells whether we actually saw the state begin: true after a change from a
+    recent different state, false when since only marks the first sighting (new vessel,
+    or a gap over STALE_MINUTES such as an ingestion restart).
+    """
+    # Pipeline update: "$state", "$since", "$since_seen" and "$ts" are the stored values
+    # before this update, so the check happens inside MongoDB and survives restarts.
     recent = {"$gte": ["$ts", fields["ts"] - timedelta(minutes=config.STALE_MINUTES)]}
     same = {"$and": [{"$eq": ["$state", fields["state"]]}, recent]}
     since = {"$cond": [same, "$since", fields["ts"]]}
-    return UpdateOne({"mmsi": fields["mmsi"]}, [{"$set": {**fields, "since": since}}], upsert=True)
+    since_seen = {"$cond": [same, "$since_seen", recent]}
+    return UpdateOne({"mmsi": fields["mmsi"]},
+                     [{"$set": {**fields, "since": since, "since_seen": since_seen}}], upsert=True)
 
 
 async def flush(db, positions, vessels, states):
