@@ -19,7 +19,6 @@ LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway
 # Same color for a state everywhere: map dots and berth-plan bars.
 PALETTE = {"light": {"at_berth": "#2a78d6", "anchored": "#eb6834", "underway": "#1baf7a", "surface": "#ffffff"},
            "dark": {"at_berth": "#3987e5", "anchored": "#d95926", "underway": "#199e70", "surface": "#0e1117"}}
-LEGEND = "🔵 at berth · 🟠 at anchor · 🟢 underway"
 MOORED, PROPOSED = "Moored now (estimated stay)", "Proposed mooring"
 
 
@@ -57,8 +56,8 @@ def fmt(delta):
     return f"{minutes // 60}h {minutes % 60:02d}m"
 
 
-st.set_page_config(page_title="HarborWatch", page_icon="⚓", layout="wide")
-st.title("⚓ HarborWatch: Port of Genoa")
+st.set_page_config(page_title="HarborWatch", page_icon=":material/anchor:", layout="wide")
+st.title("HarborWatch: Port of Genoa")
 
 
 @st.fragment(run_every="60s")  # reruns only this function, so the page doesn't flicker
@@ -89,7 +88,7 @@ def dashboard():
     cols[4].metric("Max wait at anchor", fmt(anchored["wait"].max()) if len(anchored) else "-")
 
     st.pydeck_chart(port_map(df), height=520)
-    st.caption(LEGEND + " · ◯ berth areas from data/berths.json · hover for details")
+    st.caption(legend() + " · rings: berth areas from data/berths.json · hover for details", unsafe_allow_html=True)
 
     st.subheader("Commercial vessels at anchor, per hour")
     history = congestion_history()
@@ -191,11 +190,11 @@ def data_status(now):
     last = db.positions.find_one(sort=[("ts", -1)], projection={"ts": 1})
     age = now - pd.Timestamp(last["ts"]) if last else None
     if age is None or age > timedelta(minutes=config.STALE_MINUTES):
-        status = "⛔ stopped"
+        status, icon = "stopped", ":material/block:"
     elif age > timedelta(minutes=2):  # AIS delay (~10 s) + FLUSH_SECONDS, with margin
-        status = "⚠️ delayed"
+        status, icon = "delayed", ":material/warning:"
     else:
-        status = "✅ live"
+        status, icon = "live", ":material/check_circle:"
 
     # Continuity at hour resolution, reusing the cached hourly series: count back from the
     # last hour with data to the first hour without.
@@ -211,9 +210,9 @@ def data_status(now):
     stats = db.command("dbStats")
     used_mb = (stats["dataSize"] + stats["indexSize"]) / 2**20
 
-    stopped = status.startswith("⛔")
+    stopped = status == "stopped"
     run = f"last run {hours} h" if stopped else f"{hours} h continuous"  # hours belong to the past run
-    with st.expander(f"Data status: {status}, {run}"):
+    with st.expander(f"Data status: {status}, {run}", icon=icon):
         cols = st.columns(4)
         cols[0].metric("Last position", "never" if age is None else fmt_age(age), help=status)
         cols[1].metric("Continuous collection", "0 h" if stopped else f"{hours} h",
@@ -224,6 +223,12 @@ def data_status(now):
                             ". Categories below the threshold use the default stay.")
         cols[3].metric("Atlas storage", f"{used_mb:.1f} MB", help=f"of {config.STORAGE_LIMIT_MB} MB "
                        f"({100 * used_mb / config.STORAGE_LIMIT_MB:.1f}%); the TTL keeps it near ~70 MB")
+
+
+def legend():
+    """Map legend in the exact dot colors of the current theme (HTML, for st.caption)."""
+    c = colors()
+    return " · ".join(f'<span style="color:{c[s]}">●</span> {LABELS[s].lower()}' for s in LABELS)
 
 
 def fmt_age(delta):
