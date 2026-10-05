@@ -6,3 +6,9 @@ address = "localhost"
 
 [browser]
 gatherUsageStats = false
+
+[theme.light]
+primaryColor = "#2a78d6"
+
+[theme.dark]
+primaryColor = "#3987e5"

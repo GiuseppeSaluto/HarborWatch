@@ -15,6 +15,7 @@ from classify import COMMERCIAL, ship_category
 from optimize import measure_stays, plan_berths, prepare, service_minutes
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
+ICONS = {"at_berth": ":material/directions_boat:", "anchored": ":material/anchor:", "underway": ":material/sailing:"}
 # Categorical slots 1-3 of the dataviz skill's validated reference palette, stepped per theme.
 # Same color for a state everywhere: map dots and berth-plan bars.
 PALETTE = {"light": {"at_berth": "#2a78d6", "anchored": "#eb6834", "underway": "#1baf7a", "surface": "#ffffff"},
@@ -81,11 +82,20 @@ def dashboard():
     anchored = df[df["state"] == "anchored"].assign(wait=lambda d: now - pd.to_datetime(d["since"], utc=True))
     counts = df["state"].value_counts()
 
+    # Sparkline in the "At anchor" card: the hourly series of the chart below, last 24 hours with data.
+    trend = congestion_history()
+    trend = trend["anchored"].dropna().tail(24).tolist() if not trend.empty else []
     cols = st.columns(5)
     for col, state in zip(cols, LABELS):
-        col.metric(LABELS[state], int(counts.get(state, 0)))
-    cols[3].metric("Mean wait at anchor", fmt(anchored["wait"].mean()) if len(anchored) else "-")
-    cols[4].metric("Max wait at anchor", fmt(anchored["wait"].max()) if len(anchored) else "-")
+        spark = {"chart_data": trend, "chart_type": "area",
+                 "help": "Trend: commercial vessels at anchor per hour, last 24 hours with data"} \
+            if state == "anchored" and len(trend) > 1 else {}
+        # height="stretch": cards without a sparkline grow to the row's height, so the row stays even.
+        col.metric(LABELS[state], int(counts.get(state, 0)), border=True, icon=ICONS[state], height="stretch", **spark)
+    cols[3].metric("Mean wait at anchor", fmt(anchored["wait"].mean()) if len(anchored) else "-",
+                   border=True, icon=":material/hourglass_top:", height="stretch")
+    cols[4].metric("Max wait at anchor", fmt(anchored["wait"].max()) if len(anchored) else "-",
+                   border=True, icon=":material/schedule:", height="stretch")
 
     st.pydeck_chart(port_map(df), height=520)
     st.caption(legend() + " · rings: berth areas from data/berths.json · hover for details", unsafe_allow_html=True)
@@ -191,11 +201,11 @@ def data_status(now):
     last = db.positions.find_one(sort=[("ts", -1)], projection={"ts": 1})
     age = now - pd.Timestamp(last["ts"]) if last else None
     if age is None or age > timedelta(minutes=config.STALE_MINUTES):
-        status, icon = "stopped", ":material/block:"
+        status, icon, color = "stopped", ":material/block:", "red"
     elif age > timedelta(minutes=2):  # AIS delay (~10 s) + FLUSH_SECONDS, with margin
-        status, icon = "delayed", ":material/warning:"
+        status, icon, color = "delayed", ":material/warning:", "orange"
     else:
-        status, icon = "live", ":material/check_circle:"
+        status, icon, color = "live", ":material/check_circle:", "green"
 
     # Continuity at hour resolution, reusing the cached hourly series: count back from the
     # last hour with data to the first hour without.
@@ -213,6 +223,8 @@ def data_status(now):
 
     stopped = status == "stopped"
     run = f"last run {hours} h" if stopped else f"{hours} h continuous"  # hours belong to the past run
+    # Status colors are for status only, and always come with an icon and a word.
+    st.badge(f"Data {status}" + ("" if age is None else f" · last position {fmt_age(age)}"), icon=icon, color=color)
     with st.expander(f"Data status: {status}, {run}", icon=icon):
         cols = st.columns(4)
         cols[0].metric("Last position", "never" if age is None else fmt_age(age), help=status)
