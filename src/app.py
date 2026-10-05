@@ -12,7 +12,8 @@ from pymongo import MongoClient
 
 import config
 from classify import COMMERCIAL, ship_category
-from optimize import plan_berths, prepare, service_minutes, stays_pipeline
+from history import continuous_hours, hourly_series
+from optimize import not_planned, plan_berths, prepare, service_minutes, stays_pipeline
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
 ICONS = {"at_berth": ":material/directions_boat:", "anchored": ":material/anchor:", "underway": ":material/sailing:"}
@@ -134,20 +135,14 @@ def congestion_history():
     covered = {pd.Timestamp(d["_id"]).tz_convert("UTC") for d in db.positions.aggregate([
         {"$match": {"state": {"$exists": True}, "ts": {"$gte": since}}}, {"$group": {"_id": hour}}])}
     if not covered:
-        return pd.DataFrame()
+        return pd.DataFrame()  # hourly_series would give no rows, and a DataFrame of none has no columns
     commercial = {v["mmsi"] for v in db.vessels.find({}, {"mmsi": 1, "ship_type": 1})
                   if ship_category(v.get("ship_type")) in COMMERCIAL}
     counts = Counter(pd.Timestamp(d["_id"]["hour"]).tz_convert("UTC") for d in db.positions.aggregate([
         {"$match": {"state": "anchored", "ts": {"$gte": since}}},
         {"$group": {"_id": {"hour": hour, "mmsi": "$mmsi"}}}]) if d["_id"]["mmsi"] in commercial)
-    hours = pd.date_range(min(covered), max(covered), freq="h")
-    # None (not 0) for hours without data: the line breaks there instead of diving to zero.
-    history = pd.DataFrame({"hour": hours, "label": [f"{h:%a %H:%M}" for h in hours],
-                            "anchored": [counts.get(h, 0) if h in covered else None for h in hours]})
-    # A line needs two neighbours: an hour between gaps (e.g. the first after a restart)
-    # would be invisible, so it gets a dot.
-    has = history["anchored"].notna()
-    history["alone"] = has & ~has.shift(1, fill_value=False) & ~has.shift(-1, fill_value=False)
+    history = pd.DataFrame(hourly_series(covered, counts))
+    history["label"] = history["hour"].map(lambda h: f"{h:%a %H:%M}")
     return history
 
 
@@ -186,9 +181,8 @@ def berth_plan(df, now):
         } for p in plan]), hide_index=True)
     # Say who is left out instead of dropping them silently (a 251 m tanker fits no observed
     # Multedo berth, for instance).
-    planned = {v["name"] for v in vessels}
     left_out = [f"{s['name']} ({s['category']}, " + (f"{s['length']:g} m" if s["length"] else "length unknown") + ")"
-                for s in states if s["state"] == "anchored" and s["category"] in COMMERCIAL and s["name"] not in planned]
+                for s in not_planned(states, vessels)]
     if left_out:
         st.caption("Not planned, no known berth fits (berth lengths in data/berths.json are partly observed, "
                    "so they can be too short) or length unknown: " + ", ".join(left_out))
@@ -215,11 +209,7 @@ def data_status(now):
     # Continuity at hour resolution, reusing the cached hourly series: count back from the
     # last hour with data to the first hour without.
     history = congestion_history()
-    hours = 0
-    for value in reversed(history["anchored"].tolist() if not history.empty else []):
-        if pd.isna(value):
-            break
-        hours += 1
+    hours = continuous_hours(history["anchored"].tolist() if not history.empty else [])
 
     _, counts = stay_estimates()
     measured = [c for c, n in counts.items() if n >= config.MIN_STAYS]

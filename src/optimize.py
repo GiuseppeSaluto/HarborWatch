@@ -151,6 +151,16 @@ def prepare(states, berths, now, service=None):
     return vessels, berths
 
 
+def not_planned(states, vessels):
+    """Commercial vessels at anchor that prepare left out (no fitting berth, or length unknown).
+
+    states as for prepare, vessels as prepare returned them. Shown in the dashboard so that
+    nobody is dropped silently.
+    """
+    planned = {v["name"] for v in vessels}
+    return [s for s in states if s["state"] == "anchored" and s["category"] in COMMERCIAL and s["name"] not in planned]
+
+
 def plan_berths(vessels, berths):
     """Assign each vessel a berth and a start time, minimizing the total wait.
 

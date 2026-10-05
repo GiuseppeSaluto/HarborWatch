@@ -5,7 +5,7 @@ import pytest
 
 import config
 from classify import COMMERCIAL
-from optimize import plan_berths, prepare
+from optimize import not_planned, plan_berths, prepare
 
 
 def V(name, length, arrival, service, category="cargo"):
@@ -73,6 +73,18 @@ def test_too_long_vessels_are_all_named():
 def test_vessel_with_no_berth_for_its_category():
     with pytest.raises(ValueError, match="CRUISER"):
         plan_berths([V("CRUISER", 100, 0, 10, "passenger")], [B("QUAY", 300)])
+
+
+def test_not_planned_lists_who_prepare_left_out():
+    now = datetime(2026, 10, 5, tzinfo=UTC)
+    s = lambda name, state="anchored", category="tanker", length=200: {
+        "name": name, "state": state, "category": category, "length": length, "since": now, "location": [8.9, 44.4]}
+    states = [s("FITS"), s("TOO LONG", length=400), s("NO LENGTH", length=None), s("CARGO", category="cargo"),
+              s("YACHT", category="pleasure"), s("MOORED", state="at_berth", length=400)]
+    vessels, _ = prepare(states, [B("OIL", 300, ["tanker"]) | {"location": [8.9, 44.4]}], now)
+    # Left out: too long, unknown length, no berth for its category. Not listed: planned,
+    # non-commercial, or not at anchor.
+    assert [v["name"] for v in not_planned(states, vessels)] == ["TOO LONG", "NO LENGTH", "CARGO"]
 
 
 def test_berths_file():
