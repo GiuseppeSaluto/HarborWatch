@@ -75,6 +75,15 @@ def test_vessel_with_no_berth_for_its_category():
         plan_berths([V("CRUISER", 100, 0, 10, "passenger")], [B("QUAY", 300)])
 
 
+def test_prepare_names_the_moored_vessel():
+    now = datetime(2026, 10, 5, tzinfo=UTC)
+    moored = {"name": "M", "state": "at_berth", "category": "cargo", "length": 200, "since": now,
+              "location": [8.9, 44.4]}
+    _, berths = prepare([moored], [B("Q1", 300) | {"location": [8.9, 44.4]},
+                                   B("Q2", 300) | {"location": [8.0, 44.0]}], now)
+    assert [b.get("occupied_by") for b in berths] == ["M", None]
+
+
 def test_berths_file():
     names = [b["name"] for b in config.BERTHS]
     assert len(names) == len(set(names))  # berth names are plan keys

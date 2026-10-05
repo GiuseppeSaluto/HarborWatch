@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 from pymongo import MongoClient
@@ -11,8 +12,16 @@ from classify import COMMERCIAL, ship_category
 from optimize import measure_stays, plan_berths, prepare, service_minutes
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
-COLORS = {"at_berth": "#2e7d32", "anchored": "#ef6c00", "underway": "#1565c0"}
-LEGEND = "🟢 at berth · 🟠 at anchor · 🔵 underway"
+# Categorical slots 1-3 of the dataviz skill's validated reference palette, stepped per theme.
+# Same color for a state everywhere: map dots and berth-plan bars.
+PALETTE = {"light": {"at_berth": "#2a78d6", "anchored": "#eb6834", "underway": "#1baf7a", "surface": "#ffffff"},
+           "dark": {"at_berth": "#3987e5", "anchored": "#d95926", "underway": "#199e70", "surface": "#0e1117"}}
+LEGEND = "🔵 at berth · 🟠 at anchor · 🟢 underway"
+MOORED, PROPOSED = "Moored now (estimated stay)", "Proposed mooring"
+
+
+def colors():
+    return PALETTE["dark" if st.context.theme.type == "dark" else "light"]
 
 
 @st.cache_resource
@@ -75,7 +84,7 @@ def dashboard():
     cols[3].metric("Mean wait at anchor", fmt(anchored["wait"].mean()) if len(anchored) else "-")
     cols[4].metric("Max wait at anchor", fmt(anchored["wait"].max()) if len(anchored) else "-")
 
-    st.map(df.assign(color=df["state"].map(COLORS)), latitude="lat", longitude="lon", color="color", size=80)
+    st.map(df.assign(color=df["state"].map(colors())), latitude="lat", longitude="lon", color="color", size=80)
     st.caption(LEGEND)
 
     st.subheader("Waiting at anchor")
@@ -122,17 +131,43 @@ def berth_plan(df, now):
     if not plan:
         st.write("No commercial vessel at anchor that fits a known berth.")
         return
-    st.dataframe(pd.DataFrame([{
-        "vessel": p["vessel"], "berth": p["berth"],
-        "moors at (UTC)": f"{now + timedelta(minutes=p['start']):%a %H:%M}",
-        "more wait": fmt(timedelta(minutes=p["wait"])),
-    } for p in plan]), hide_index=True)
+    st.altair_chart(gantt(plan, berths, now), width="stretch")
+    with st.expander("Table view"):
+        st.dataframe(pd.DataFrame([{
+            "vessel": p["vessel"], "berth": p["berth"],
+            "moors at (UTC)": f"{now + timedelta(minutes=p['start']):%a %H:%M}",
+            "more wait": fmt(timedelta(minutes=p["wait"])),
+        } for p in plan]), hide_index=True)
     busy = sum(1 for b in berths if b["free_from"])
     st.caption(f"Minimizes the total wait over {len(berths)} berths ({busy} busy now) in data/berths.json. "
                "Expected stays: " + ", ".join(
                    f"{c} {m // 60} h " + (f"(median of {counts[c]} observed)" if counts[c] >= config.MIN_STAYS
                                          else f"(default, {counts[c]} of {config.MIN_STAYS} stays observed)")
                    for c, m in service.items()) + "; counted from when we first saw each vessel moored.")
+
+
+def gantt(plan, berths, now):
+    """One row per berth: the moored vessel's estimated stay, then the proposed moorings."""
+    at = lambda minutes: now + timedelta(minutes=minutes)
+    bars = pd.DataFrame(
+        [{"berth": b["name"], "vessel": b["occupied_by"], "kind": MOORED, "from": now, "to": at(b["free_from"])}
+         for b in berths if b["free_from"]] +
+        [{"berth": p["berth"], "vessel": p["vessel"], "kind": PROPOSED, "from": at(p["start"]), "to": at(p["end"])}
+         for p in plan])
+    # Tooltips have no scale to make them UTC, so they get the times as text.
+    bars["from (UTC)"], bars["to (UTC)"] = (bars[t].map(lambda d: f"{d:%a %H:%M}") for t in ("from", "to"))
+    c = colors()
+    names = [b["name"] for b in berths]  # berths.json order, west to east; free berths keep their row
+    # A 2px stroke in the page color keeps a moored bar and the proposed one after it apart.
+    return alt.Chart(bars).mark_bar(cornerRadius=4, height={"band": 0.7}, stroke=c["surface"], strokeWidth=2).encode(
+        # utc scale + plain format = UTC labels; a formatType would switch to browser time.
+        x=alt.X("from:T", title=None, scale=alt.Scale(type="utc"), axis=alt.Axis(format="%a %H:%M", grid=False)),
+        x2="to:T",
+        y=alt.Y("berth:N", title=None, scale=alt.Scale(domain=names), sort=names),
+        color=alt.Color("kind:N", title=None, legend=alt.Legend(orient="top"),
+                        scale=alt.Scale(domain=[MOORED, PROPOSED], range=[c["at_berth"], c["anchored"]])),
+        tooltip=["vessel:N", "berth:N", "kind:N", "from (UTC):N", "to (UTC):N"],
+    ).properties(height=22 * len(berths))
 
 
 dashboard()

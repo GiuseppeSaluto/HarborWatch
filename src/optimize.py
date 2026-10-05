@@ -76,7 +76,8 @@ def prepare(states, berths, now, service=None):
     service: expected stay in minutes per category (from service_minutes), default config.SERVICE_MINUTES.
     Returns (vessels, berths): the commercial anchored vessels that fit some berth, waiting
     from minute 0 with the expected stay of their category; and copies of the berths
-    with free_from, the minutes until the vessel moored there is expected to leave.
+    with free_from, the minutes until the vessel moored there is expected to leave, and
+    occupied_by, its name, on the berths a moored vessel was matched to.
     """
     # ponytail: one expected stay per category, and moored vessels are matched to the nearest
     # compatible berth. Upgrade path: stays per vessel size or terminal, real berth geometries.
@@ -90,6 +91,7 @@ def prepare(states, berths, now, service=None):
             continue  # more vessels than berths we know of in that area
         berth = min(free, key=lambda b: math.dist(b["location"], s["location"]))
         occupied.add(berth["name"])
+        berth["occupied_by"] = s["name"]
         leaves = s["since"] + timedelta(minutes=service[s["category"]])
         berth["free_from"] = max(0, int((leaves - now).total_seconds() // 60))
     vessels = [{"name": s["name"], "length": s["length"], "category": s["category"],
