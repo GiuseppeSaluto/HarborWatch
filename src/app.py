@@ -12,7 +12,7 @@ from pymongo import MongoClient
 
 import config
 from classify import COMMERCIAL, ship_category
-from optimize import measure_stays, plan_berths, prepare, service_minutes
+from optimize import plan_berths, prepare, service_minutes, stays_pipeline
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
 ICONS = {"at_berth": ":material/directions_boat:", "anchored": ":material/anchor:", "underway": ":material/sailing:"}
@@ -155,14 +155,11 @@ def congestion_history():
 def stay_estimates():
     """Expected stay per category, measured from the position history where possible."""
     db = get_db()
-    # ponytail: reads every position with a state (up to ~300k at a 7-day TTL) once an hour.
-    # Upgrade path: an aggregation pipeline, or storing stays as the ingestion sees them end.
-    positions = list(db.positions.find({"state": {"$exists": True}}, {"_id": 0, "mmsi": 1, "ts": 1, "state": 1})
-                     .sort([("mmsi", 1), ("ts", 1)]))
+    # The stays are found inside MongoDB: only they travel, not the whole position history.
     category_of = {v["mmsi"]: ship_category(v.get("ship_type"))
                    for v in db.vessels.find({"length": {"$gte": config.MIN_STAY_VESSEL_M}}, {"mmsi": 1, "ship_type": 1})}
-    stays = [(m, start, end) for m, start, end in measure_stays(positions, config.STALE_MINUTES)
-             if end - start >= timedelta(minutes=config.MIN_STAY_MINUTES)]
+    stays = [(d["mmsi"], d["start"], d["end"]) for d in db.positions.aggregate(stays_pipeline(config.STALE_MINUTES))
+             if d["end"] - d["start"] >= timedelta(minutes=config.MIN_STAY_MINUTES)]
     return service_minutes(stays, category_of, config.SERVICE_MINUTES, config.MIN_STAYS)
 
 
