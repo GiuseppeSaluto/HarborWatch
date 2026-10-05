@@ -1,9 +1,11 @@
 """Streamlit dashboard: vessels by state on a map, and waiting time at anchor."""
 
+import math
 from datetime import UTC, datetime, timedelta
 
 import altair as alt
 import pandas as pd
+import pydeck as pdk
 import streamlit as st
 from pymongo import MongoClient
 
@@ -84,8 +86,8 @@ def dashboard():
     cols[3].metric("Mean wait at anchor", fmt(anchored["wait"].mean()) if len(anchored) else "-")
     cols[4].metric("Max wait at anchor", fmt(anchored["wait"].max()) if len(anchored) else "-")
 
-    st.map(df.assign(color=df["state"].map(colors())), latitude="lat", longitude="lon", color="color", size=80)
-    st.caption(LEGEND)
+    st.pydeck_chart(port_map(df), height=520)
+    st.caption(LEGEND + " · ◯ berth areas from data/berths.json · hover for details")
 
     st.subheader("Waiting at anchor")
     if anchored.empty:
@@ -144,6 +146,53 @@ def berth_plan(df, now):
                    f"{c} {m // 60} h " + (f"(median of {counts[c]} observed)" if counts[c] >= config.MIN_STAYS
                                          else f"(default, {counts[c]} of {config.MIN_STAYS} stays observed)")
                    for c, m in service.items()) + "; counted from when we first saw each vessel moored.")
+
+
+def rgb(hex_color):
+    return [int(hex_color[i:i + 2], 16) for i in (1, 3, 5)]
+
+
+def port_map(df):
+    """Vessels colored by state, plus one ring per berth area; both explain themselves on hover."""
+    c = colors()
+    known = lambda v, unit="": "?" if pd.isna(v) else f"{v:g}{unit}"
+    vessels = pd.DataFrame({
+        "position": df[["lon", "lat"]].values.tolist(),
+        "color": df["state"].map(lambda s: rgb(c[s])),
+        # One "tip" field per row: pydeck has a single tooltip template for every layer.
+        "tip": [f"<b>{r['name'] if isinstance(r['name'], str) else r['mmsi']}</b><br>{r['type']}, "
+                f"{known(r['length'], ' m')}<br>{LABELS[r['state']]}, {known(r['sog'], ' kn')}"
+                for _, r in df.iterrows()],
+    })
+    by_area = {}
+    for b in config.BERTHS:
+        by_area.setdefault(b["area"], []).append(b)
+    areas = pd.DataFrame([{
+        "position": bs[0]["location"], "name": area,
+        "tip": f"<b>{area}</b><br>{len(bs)} berth{'s' * (len(bs) > 1)}: "
+               f"{', '.join(str(b['length']) for b in bs)} m<br>accepts {', '.join(bs[0]['accepts'])}",
+    } for area, bs in by_area.items()])
+    # Direct labels only where they fit: the passenger terminals and SECH sit a few hundred
+    # metres apart, so their names would pile up; hovering their rings tells them apart.
+    km = lambda p, q: math.dist([p[0] * 111 * math.cos(math.radians(p[1])), p[1] * 111],
+                                [q[0] * 111 * math.cos(math.radians(q[1])), q[1] * 111])
+    labeled = areas[[all(km(p, q) > 1 for q in areas["position"] if q is not p) for p in areas["position"]]]
+    ink = [255, 255, 255] if st.context.theme.type == "dark" else [11, 11, 11]
+    return pdk.Deck(
+        map_style=None,  # Streamlit's basemap, light or dark with the theme
+        initial_view_state=pdk.ViewState(latitude=44.405, longitude=8.85, zoom=11.3),
+        tooltip={"html": "{tip}"},
+        layers=[
+            pdk.Layer("ScatterplotLayer", areas, get_position="position", get_radius=220, filled=False,
+                      stroked=True, get_line_color=ink, line_width_min_pixels=1.5, pickable=True),
+            pdk.Layer("TextLayer", labeled, get_position="position", get_text="name", get_size=13,
+                      get_color=ink, get_pixel_offset=[0, -20]),
+            # Surface-colored ring keeps overlapping dots apart (moored ships sit side by side).
+            pdk.Layer("ScatterplotLayer", vessels, get_position="position", get_fill_color="color",
+                      get_radius=60, radius_min_pixels=4, stroked=True, get_line_color=rgb(c["surface"]),
+                      line_width_min_pixels=1, pickable=True),
+        ],
+    )
 
 
 def gantt(plan, berths, now):
