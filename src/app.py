@@ -64,6 +64,7 @@ st.title("⚓ HarborWatch: Port of Genoa")
 @st.fragment(run_every="60s")  # reruns only this function, so the page doesn't flicker
 def dashboard():
     now = pd.Timestamp(datetime.now(UTC))
+    data_status(now)  # before the empty check: it matters most when the ingestion is down
     df = load_states(get_db(), now)
     if df.empty:
         st.warning(f"No vessel heard from in the last {config.STALE_MINUTES} minutes: is ingest.py running?")
@@ -182,6 +183,52 @@ def berth_plan(df, now):
                    f"{c} {m // 60} h " + (f"(median of {counts[c]} observed)" if counts[c] >= config.MIN_STAYS
                                          else f"(default, {counts[c]} of {config.MIN_STAYS} stays observed)")
                    for c, m in service.items()) + "; counted from when we first saw each vessel moored.")
+
+
+def data_status(now):
+    """How far to trust the page: data freshness, continuity, measured stays, storage."""
+    db = get_db()
+    last = db.positions.find_one(sort=[("ts", -1)], projection={"ts": 1})
+    age = now - pd.Timestamp(last["ts"]) if last else None
+    if age is None or age > timedelta(minutes=config.STALE_MINUTES):
+        status = "⛔ stopped"
+    elif age > timedelta(minutes=2):  # AIS delay (~10 s) + FLUSH_SECONDS, with margin
+        status = "⚠️ delayed"
+    else:
+        status = "✅ live"
+
+    # Continuity at hour resolution, reusing the cached hourly series: count back from the
+    # last hour with data to the first hour without.
+    history = congestion_history()
+    hours = 0
+    for value in reversed(history["anchored"].tolist() if not history.empty else []):
+        if pd.isna(value):
+            break
+        hours += 1
+
+    _, counts = stay_estimates()
+    measured = [c for c, n in counts.items() if n >= config.MIN_STAYS]
+    stats = db.command("dbStats")
+    used_mb = (stats["dataSize"] + stats["indexSize"]) / 2**20
+
+    stopped = status.startswith("⛔")
+    run = f"last run {hours} h" if stopped else f"{hours} h continuous"  # hours belong to the past run
+    with st.expander(f"Data status: {status}, {run}"):
+        cols = st.columns(4)
+        cols[0].metric("Last position", "never" if age is None else fmt_age(age), help=status)
+        cols[1].metric("Continuous collection", "0 h" if stopped else f"{hours} h",
+                       help=f"Hours in a row with data, up to now{f' (the last run lasted {hours} h)' if stopped else ''}. "
+                            "The berth plan and the stay estimates need days of it.")
+        cols[2].metric("Measured stays", f"{len(measured)} of {len(counts)} categories",
+                       help=", ".join(f"{c}: {n} of {config.MIN_STAYS} stays" for c, n in counts.items()) +
+                            ". Categories below the threshold use the default stay.")
+        cols[3].metric("Atlas storage", f"{used_mb:.1f} MB", help=f"of {config.STORAGE_LIMIT_MB} MB "
+                       f"({100 * used_mb / config.STORAGE_LIMIT_MB:.1f}%); the TTL keeps it near ~70 MB")
+
+
+def fmt_age(delta):
+    seconds = int(delta.total_seconds())
+    return f"{seconds} s ago" if seconds < 120 else f"{seconds // 60} min ago" if seconds < 7200 else f"{seconds // 3600} h ago"
 
 
 def rgb(hex_color):
