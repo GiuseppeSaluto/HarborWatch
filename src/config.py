@@ -32,6 +32,9 @@ STORAGE_LIMIT_MB = 512
 STORAGE_WARN_RATIO = 0.8
 STATS_SECONDS = 600
 
+# Dashboard times are the port's local time, whoever looks at it and from wherever.
+TIMEZONE = "Europe/Rome"
+
 # Dashboard: vessels not heard from in this long are considered gone (left the area,
 # or AIS switched off). Moored and anchored vessels transmit every few minutes.
 STALE_MINUTES = 30

@@ -24,6 +24,20 @@ PALETTE = {"light": {"at_berth": "#2a78d6", "anchored": "#eb6834", "underway": "
 MOORED, PROPOSED = "Moored now (estimated stay)", "Proposed mooring"
 
 
+def local(t):
+    """A UTC instant as the port's clock time, for text."""
+    return pd.Timestamp(t).tz_convert(config.TIMEZONE)
+
+
+def chart_time(t):
+    """The port's clock time labelled as UTC, for charts.
+
+    Vega-Lite only draws times in UTC or in the browser's zone; on a UTC scale this shows the
+    port's clock whatever the viewer's browser is set to.
+    """
+    return local(t).tz_localize(None).tz_localize("UTC")
+
+
 def colors():
     return PALETTE["dark" if st.context.theme.type == "dark" else "light"]
 
@@ -107,7 +121,7 @@ def dashboard():
         st.write("No history yet.")
     else:
         st.altair_chart(congestion_chart(history), width="stretch")
-        st.caption("Distinct commercial vessels seen at anchor during each hour (UTC). "
+        st.caption("Distinct commercial vessels seen at anchor during each hour (Genoa time). "
                    "Gaps are hours when the ingestion was off, not empty anchorages.")
 
     st.subheader("Waiting at anchor")
@@ -121,7 +135,7 @@ def dashboard():
         )
     berth_plan(everyone, now)
 
-    st.caption(f"Updated {now:%H:%M:%S} UTC · vessels heard from in the last {config.STALE_MINUTES} min · "
+    st.caption(f"Updated {local(now):%H:%M:%S %Z} · vessels heard from in the last {config.STALE_MINUTES} min · "
                f"{hidden} hidden (tugs, yachts, service craft, or type not received yet) · "
                "map © OpenStreetMap contributors")
 
@@ -142,7 +156,8 @@ def congestion_history():
         {"$match": {"state": "anchored", "ts": {"$gte": since}}},
         {"$group": {"_id": {"hour": hour, "mmsi": "$mmsi"}}}]) if d["_id"]["mmsi"] in commercial)
     history = pd.DataFrame(hourly_series(covered, counts))
-    history["label"] = history["hour"].map(lambda h: f"{h:%a %H:%M}")
+    history["label"] = history["hour"].map(lambda h: f"{local(h):%a %H:%M}")
+    history["hour"] = history["hour"].map(chart_time)
     return history
 
 
@@ -176,7 +191,7 @@ def berth_plan(df, now):
     with st.expander("Table view"):
         st.dataframe(pd.DataFrame([{
             "vessel": p["vessel"], "berth": p["berth"],
-            "moors at (UTC)": f"{now + timedelta(minutes=p['start']):%a %H:%M}",
+            "moors at": f"{local(now + timedelta(minutes=p['start'])):%a %H:%M %Z}",
             "more wait": fmt(timedelta(minutes=p["wait"])),
         } for p in plan]), hide_index=True)
     # Say who is left out instead of dropping them silently (a 251 m tanker fits no observed
@@ -306,7 +321,7 @@ def congestion_chart(history):
         y=alt.Y("anchored:Q", title="vessels", axis=alt.Axis(tickMinStep=1)))
     points = base.mark_point(filled=True, size=80, color=c["anchored"]).encode(
         y="anchored:Q", opacity=alt.condition(hover, alt.value(1), alt.value(0)),
-        tooltip=[alt.Tooltip("label:N", title="hour (UTC)"), alt.Tooltip("anchored:Q", title="at anchor")],
+        tooltip=[alt.Tooltip("label:N", title="hour"), alt.Tooltip("anchored:Q", title="at anchor")],
     ).add_params(hover)
     alone = base.mark_point(filled=True, size=64, color=c["anchored"]).encode(y="anchored:Q").transform_filter(
         alt.datum.alone)
@@ -322,13 +337,14 @@ def gantt(plan, berths, now):
          for b in berths if b["free_from"]] +
         [{"berth": p["berth"], "vessel": p["vessel"], "kind": PROPOSED, "from": at(p["start"]), "to": at(p["end"])}
          for p in plan])
-    # Tooltips have no scale to make them UTC, so they get the times as text.
-    bars["from (UTC)"], bars["to (UTC)"] = (bars[t].map(lambda d: f"{d:%a %H:%M}") for t in ("from", "to"))
+    # Tooltips have no scale, so they get the local times as text; the bars get chart_time.
+    bars["from_text"], bars["to_text"] = (bars[t].map(lambda d: f"{local(d):%a %H:%M}") for t in ("from", "to"))
+    bars["from"], bars["to"] = bars["from"].map(chart_time), bars["to"].map(chart_time)
     c = colors()
     names = [b["name"] for b in berths]  # berths.json order, west to east; free berths keep their row
     # A 2px stroke in the page color keeps a moored bar and the proposed one after it apart.
     return alt.Chart(bars).mark_bar(cornerRadius=4, height={"band": 0.7}, stroke=c["surface"], strokeWidth=2).encode(
-        # utc scale + plain format = UTC labels; a formatType would switch to browser time.
+        # utc scale + plain format = the labels as given (chart_time); a formatType would switch to browser time.
         x=alt.X("from:T", title=None, scale=alt.Scale(type="utc"), axis=alt.Axis(format="%a %H:%M", grid=False)),
         x2="to:T",
         # Every berth labelled in full: Vega would otherwise drop overlapping labels and cut long ones.
@@ -336,7 +352,7 @@ def gantt(plan, berths, now):
                 axis=alt.Axis(labelOverlap=False, labelLimit=220)),
         color=alt.Color("kind:N", title=None, legend=alt.Legend(orient="top", labelLimit=320),
                         scale=alt.Scale(domain=[MOORED, PROPOSED], range=[c["at_berth"], c["anchored"]])),
-        tooltip=["vessel:N", "berth:N", "kind:N", "from (UTC):N", "to (UTC):N"],
+        tooltip=["vessel:N", "berth:N", "kind:N", alt.Tooltip("from_text:N", title="from"), alt.Tooltip("to_text:N", title="to")],
     ).properties(height=30 * len(berths))
 
 
