@@ -21,6 +21,11 @@ AISSTREAM_URL = "wss://stream.aisstream.io/v0/stream"
 # Failed connection attempts already back off exponentially inside websockets.
 RECONNECT_DELAY_S = 5
 
+# A connection can stay open and go silent (AISStream did, 2026-10-05): with no message for
+# this long, close it and reconnect instead of waiting forever. Genoa normally sends several
+# messages per second.
+SILENCE_S = 120
+
 log = logging.getLogger("ingest")
 
 
@@ -193,7 +198,14 @@ async def main():
                     "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
                 }))
                 log.info("subscribed to AISStream")
-                async for message in ws:
+                while True:
+                    try:
+                        async with asyncio.timeout(SILENCE_S):
+                            message = await ws.recv()
+                    except TimeoutError:
+                        log.warning("no message for %d s, reconnecting", SILENCE_S)
+                        await ws.close()
+                        break
                     msg = json.loads(message)
                     if "error" in msg:  # e.g. a wrong API key; AISStream closes right after
                         log.error("AISStream: %s", msg["error"])

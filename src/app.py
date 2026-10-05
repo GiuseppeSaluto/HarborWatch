@@ -187,6 +187,14 @@ def berth_plan(df, now):
             "moors at (UTC)": f"{now + timedelta(minutes=p['start']):%a %H:%M}",
             "more wait": fmt(timedelta(minutes=p["wait"])),
         } for p in plan]), hide_index=True)
+    # Say who is left out instead of dropping them silently (a 251 m tanker fits no observed
+    # Multedo berth, for instance).
+    planned = {v["name"] for v in vessels}
+    left_out = [f"{s['name']} ({s['category']}, " + (f"{s['length']:g} m" if s["length"] else "length unknown") + ")"
+                for s in states if s["state"] == "anchored" and s["category"] in COMMERCIAL and s["name"] not in planned]
+    if left_out:
+        st.caption("Not planned, no known berth fits (berth lengths in data/berths.json are partly observed, "
+                   "so they can be too short) or length unknown: " + ", ".join(left_out))
     busy = sum(1 for b in berths if b["free_from"])
     st.caption(f"Minimizes the total wait over {len(berths)} berths ({busy} busy now) in data/berths.json. "
                "Expected stays: " + ", ".join(
@@ -260,18 +268,20 @@ def port_map(df):
     vessels = pd.DataFrame({
         "position": df[["lon", "lat"]].values.tolist(),
         "color": df["state"].map(lambda s: rgb(c[s])),
-        # One "tip" field per row: pydeck has a single tooltip template for every layer.
-        "tip": [f"<b>{r['name'] if isinstance(r['name'], str) else r['mmsi']}</b><br>{r['type']}, "
-                f"{known(r['length'], ' m')}<br>{LABELS[r['state']]}, {known(r['sog'], ' kn')}"
-                for _, r in df.iterrows()],
+        # Plain-text title/line1/line2 on both layers: pydeck has one tooltip template for every
+        # layer, and it escapes field values, so the markup lives in the template, not the data.
+        "title": [r["name"] if isinstance(r["name"], str) else str(r["mmsi"]) for _, r in df.iterrows()],
+        "line1": [f"{r['type']}, {known(r['length'], ' m')}" for _, r in df.iterrows()],
+        "line2": [f"{LABELS[r['state']]}, {known(r['sog'], ' kn')}" for _, r in df.iterrows()],
     })
     by_area = {}
     for b in config.BERTHS:
         by_area.setdefault(b["area"], []).append(b)
     areas = pd.DataFrame([{
         "position": bs[0]["location"], "name": area,
-        "tip": f"<b>{area}</b><br>{len(bs)} berth{'s' * (len(bs) > 1)}: "
-               f"{', '.join(str(b['length']) for b in bs)} m<br>accepts {', '.join(bs[0]['accepts'])}",
+        "title": area,
+        "line1": f"{len(bs)} berth{'s' * (len(bs) > 1)}: {', '.join(str(b['length']) for b in bs)} m",
+        "line2": f"accepts {', '.join(bs[0]['accepts'])}",
     } for area, bs in by_area.items()])
     # Direct labels only where they fit: the passenger terminals and SECH sit a few hundred
     # metres apart, so their names would pile up; hovering their rings tells them apart.
@@ -282,10 +292,13 @@ def port_map(df):
     return pdk.Deck(
         map_style=None,  # Streamlit's basemap, light or dark with the theme
         initial_view_state=pdk.ViewState(latitude=44.405, longitude=8.85, zoom=11.3),
-        tooltip={"html": "{tip}"},
+        tooltip={"html": "<b>{title}</b><br>{line1}<br>{line2}"},
         layers=[
-            pdk.Layer("ScatterplotLayer", areas, get_position="position", get_radius=220, filled=False,
-                      stroked=True, get_line_color=ink, line_width_min_pixels=1.5, pickable=True),
+            # A faint fill makes the whole ring hoverable: deck.gl only picks drawn pixels, so an
+            # outline alone would need the pointer exactly on its 1.5 px line.
+            pdk.Layer("ScatterplotLayer", areas, get_position="position", get_radius=220, filled=True,
+                      get_fill_color=ink + [30], stroked=True, get_line_color=ink, line_width_min_pixels=1.5,
+                      pickable=True),
             pdk.Layer("TextLayer", labeled, get_position="position", get_text="name", get_size=13,
                       get_color=ink, get_pixel_offset=[0, -20]),
             # Surface-colored ring keeps overlapping dots apart (moored ships sit side by side).
@@ -331,11 +344,13 @@ def gantt(plan, berths, now):
         # utc scale + plain format = UTC labels; a formatType would switch to browser time.
         x=alt.X("from:T", title=None, scale=alt.Scale(type="utc"), axis=alt.Axis(format="%a %H:%M", grid=False)),
         x2="to:T",
-        y=alt.Y("berth:N", title=None, scale=alt.Scale(domain=names), sort=names),
-        color=alt.Color("kind:N", title=None, legend=alt.Legend(orient="top"),
+        # Every berth labelled in full: Vega would otherwise drop overlapping labels and cut long ones.
+        y=alt.Y("berth:N", title=None, scale=alt.Scale(domain=names), sort=names,
+                axis=alt.Axis(labelOverlap=False, labelLimit=220)),
+        color=alt.Color("kind:N", title=None, legend=alt.Legend(orient="top", labelLimit=320),
                         scale=alt.Scale(domain=[MOORED, PROPOSED], range=[c["at_berth"], c["anchored"]])),
         tooltip=["vessel:N", "berth:N", "kind:N", "from (UTC):N", "to (UTC):N"],
-    ).properties(height=22 * len(berths))
+    ).properties(height=30 * len(berths))
 
 
 dashboard()
