@@ -1,6 +1,7 @@
 """Streamlit dashboard: vessels by state on a map, and waiting time at anchor."""
 
 import math
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 import altair as alt
@@ -89,6 +90,15 @@ def dashboard():
     st.pydeck_chart(port_map(df), height=520)
     st.caption(LEGEND + " · ◯ berth areas from data/berths.json · hover for details")
 
+    st.subheader("Commercial vessels at anchor, per hour")
+    history = congestion_history()
+    if history.empty:
+        st.write("No history yet.")
+    else:
+        st.altair_chart(congestion_chart(history), width="stretch")
+        st.caption("Distinct commercial vessels seen at anchor during each hour (UTC). "
+                   "Gaps are hours when the ingestion was off, not empty anchorages.")
+
     st.subheader("Waiting at anchor")
     if anchored.empty:
         st.write("No vessel at anchor.")
@@ -103,6 +113,32 @@ def dashboard():
     st.caption(f"Updated {now:%H:%M:%S} UTC · vessels heard from in the last {config.STALE_MINUTES} min · "
                f"{hidden} hidden (tugs, yachts, service craft, or type not received yet) · "
                "map © OpenStreetMap contributors")
+
+
+@st.cache_data(ttl=600)
+def congestion_history():
+    """Commercial vessels at anchor per hour; hours without any data stay empty, not zero."""
+    db = get_db()
+    since = datetime.now(UTC) - timedelta(days=config.POSITIONS_TTL_DAYS)
+    hour = {"$dateTrunc": {"date": "$ts", "unit": "hour"}}
+    covered = {pd.Timestamp(d["_id"]).tz_convert("UTC") for d in db.positions.aggregate([
+        {"$match": {"state": {"$exists": True}, "ts": {"$gte": since}}}, {"$group": {"_id": hour}}])}
+    if not covered:
+        return pd.DataFrame()
+    commercial = {v["mmsi"] for v in db.vessels.find({}, {"mmsi": 1, "ship_type": 1})
+                  if ship_category(v.get("ship_type")) in COMMERCIAL}
+    counts = Counter(pd.Timestamp(d["_id"]["hour"]).tz_convert("UTC") for d in db.positions.aggregate([
+        {"$match": {"state": "anchored", "ts": {"$gte": since}}},
+        {"$group": {"_id": {"hour": hour, "mmsi": "$mmsi"}}}]) if d["_id"]["mmsi"] in commercial)
+    hours = pd.date_range(min(covered), max(covered), freq="h")
+    # None (not 0) for hours without data: the line breaks there instead of diving to zero.
+    history = pd.DataFrame({"hour": hours, "label": [f"{h:%a %H:%M}" for h in hours],
+                            "anchored": [counts.get(h, 0) if h in covered else None for h in hours]})
+    # A line needs two neighbours: an hour between gaps (e.g. the first after a restart)
+    # would be invisible, so it gets a dot.
+    has = history["anchored"].notna()
+    history["alone"] = has & ~has.shift(1, fill_value=False) & ~has.shift(-1, fill_value=False)
+    return history
 
 
 @st.cache_data(ttl=3600)  # a week of positions: recompute hourly, not every minute
@@ -193,6 +229,24 @@ def port_map(df):
                       line_width_min_pixels=1, pickable=True),
         ],
     )
+
+
+def congestion_chart(history):
+    """One series, so no legend: the subheader names it. Hover shows the hour and the count."""
+    c = colors()
+    hover = alt.selection_point(on="pointerover", nearest=True, fields=["hour"], empty=False, clear="pointerout")
+    base = alt.Chart(history).encode(
+        x=alt.X("hour:T", title=None, scale=alt.Scale(type="utc"), axis=alt.Axis(format="%a %H:%M", grid=False)))
+    line = base.mark_line(color=c["anchored"], strokeWidth=2).encode(
+        y=alt.Y("anchored:Q", title="vessels", axis=alt.Axis(tickMinStep=1)))
+    points = base.mark_point(filled=True, size=80, color=c["anchored"]).encode(
+        y="anchored:Q", opacity=alt.condition(hover, alt.value(1), alt.value(0)),
+        tooltip=[alt.Tooltip("label:N", title="hour (UTC)"), alt.Tooltip("anchored:Q", title="at anchor")],
+    ).add_params(hover)
+    alone = base.mark_point(filled=True, size=64, color=c["anchored"]).encode(y="anchored:Q").transform_filter(
+        alt.datum.alone)
+    rule = base.mark_rule(color="gray").encode(opacity=alt.condition(hover, alt.value(0.5), alt.value(0)))
+    return (line + alone + rule + points).properties(height=220)
 
 
 def gantt(plan, berths, now):
