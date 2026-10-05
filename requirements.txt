@@ -1,5 +1,9 @@
-pymongo>=4.13
-websockets>=14
-streamlit
-ortools
-pytest
+# Minimum versions = the ones the project is tested with; CI flags a newer release that breaks.
+pymongo>=4.18          # AsyncMongoClient
+websockets>=16         # async for ws in connect(): built-in reconnection
+streamlit>=1.64        # st.badge, metric chart_data/height, [theme.light]/[theme.dark]
+altair>=6.3
+pandas>=3.0
+pydeck>=0.9
+ortools>=9.15
+pytest>=9.1
