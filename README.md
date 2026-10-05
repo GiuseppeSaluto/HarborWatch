@@ -36,7 +36,7 @@ AISStream (WebSocket) ──> ingest.py ──> MongoDB Atlas ──> app.py (St
 - **Classification** (`src/classify.py`): a vessel is *underway* above 0.5 knots; otherwise it is *at berth* when within 100 m of the coastline, whose OpenStreetMap trace follows the quay edges in Genoa, and *at anchor* when further out. The AIS ship type separates commercial traffic (cargo, tanker, passenger) from tugs, pilot boats and yachts: during the 2026 Genoa Boat Show dozens of 50-90 m superyachts were moored in port, and length alone could not tell them from cargo ships.
 - **Storage under free-tier limits**: MongoDB Atlas M0 allows 512 MB and 100 operations per second. Positions are sampled to one per vessel per minute, written in batches every 10 seconds, and expire after 7 days through a TTL index. The ingestion logs the used and projected storage (about 70 MB at steady state, measured).
 - **State history**: each vessel's current state is upserted with the time it began, computed inside MongoDB with a pipeline update so that it survives restarts. After a gap in the data the start time is reset and flagged as "not seen", instead of silently counting the gap as waiting time.
-- **Berth plan** (`src/optimize.py`): berths come from `data/berths.json`, 25 berths with their length and accepted vessel categories, each marked as official or observed. Each waiting vessel gets an optional interval on every compatible berth; `NoOverlap` per berth keeps one vessel at a time, including the vessels already moored. Expected stays are measured from complete stays in the history once a category has enough of them, and fall back to per-category defaults until then.
+- **Berth plan** (`src/optimize.py`): berths come from `data/berths.json`, 29 berths with their length and accepted vessel categories, each marked as official or observed. Each waiting vessel gets an optional interval on every compatible berth; `NoOverlap` per berth keeps one vessel at a time, including the vessels already moored. Expected stays are measured from complete stays in the history once a category has enough of them, and fall back to per-category defaults until then.
 
 ## Run it
 
@@ -61,7 +61,7 @@ pytest
 
 ## Known limitations
 
-- **The berth plan is a deterministic model.** No tides, pilotage windows or commercial priorities; berths are one point per terminal area, and some berth counts and lengths are observed rather than official. Observed values can only be lower bounds: the Multedo oil port is modelled with two 250 m berths, so a 251 m tanker currently fits nowhere and is listed as not planned.
+- **The berth plan is a deterministic model.** No tides, drafts, pilotage windows or commercial priorities (a tanker may wait at anchor for a cargo window even with a berth free); berths are one point per terminal area. Berth data is official where published (the six Multedo oil berths, PSA terminals, cruise piers) and observed elsewhere; observed values can only be lower bounds, so a vessel that fits no known berth is listed as not planned rather than dropped.
 - **Stay durations are defaults until enough history exists.** Container and tanker calls last one or two days, so measuring them needs days of uninterrupted collection.
 - **Vessels moored before the ingestion started** are assumed to be halfway through their stay.
 - **Classification is heuristic.** A slow manoeuvring vessel can be misclassified, a vessel waiting near a quay counts as at berth, and AIS coverage has gaps. These corners are marked `ponytail:` in the code, each with its upgrade path.
