@@ -99,3 +99,25 @@ def test_service_minutes_threshold_unknowns_and_counts():
     minutes, counts = service_minutes(data, category_of, defaults, 3)
     assert minutes == {"cargo": 50, "tanker": 240, "passenger": 90}
     assert counts == {"cargo": 3, "tanker": 2, "passenger": 0}
+
+
+# The tests below are not from the test agent: they cover the collection-window rule added later.
+def five_short_cargo_stays():
+    return [(1, t(i * 100), t(i * 100 + 60)) for i in range(5)], {1: "cargo"}  # five 1-hour stays
+
+
+def test_short_window_keeps_the_default():
+    # 5 one-hour stays seen in a 7 h window: a 24 h default must not drop to 1 h.
+    stays, category_of = five_short_cargo_stays()
+    minutes, counts = service_minutes(stays, category_of, {"cargo": 1440}, 5, window_minutes=7 * 60)
+    assert minutes == {"cargo": 1440} and counts == {"cargo": 5}
+
+
+@pytest.mark.parametrize("window, expected", [
+    (2 * 1440 - 1, 1440),   # just short of twice the default: still the default
+    (2 * 1440, 60),         # exactly twice: the measured median is trusted
+    (None, 60),             # no window given: only the stay count matters
+])
+def test_window_threshold(window, expected):
+    stays, category_of = five_short_cargo_stays()
+    assert service_minutes(stays, category_of, {"cargo": 1440}, 5, window_minutes=window)[0] == {"cargo": expected}

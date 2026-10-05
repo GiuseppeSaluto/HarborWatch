@@ -26,11 +26,24 @@ def hourly_series(covered, counts):
             for i, (h, v) in enumerate(zip(hours, values))]
 
 
+def _missing(value):
+    return value is None or (isinstance(value, float) and math.isnan(value))
+
+
 def continuous_hours(values):
     """Hours with data in a row at the end of a series (None or NaN marks an hour without)."""
     hours = 0
     for value in reversed(values):
-        if value is None or (isinstance(value, float) and math.isnan(value)):
+        if _missing(value):
             break
         hours += 1
     return hours
+
+
+def longest_run(values):
+    """The longest run of hours with data anywhere in a series (None or NaN marks an hour without)."""
+    best = run = 0
+    for value in values:
+        run = 0 if _missing(value) else run + 1
+        best = max(best, run)
+    return best

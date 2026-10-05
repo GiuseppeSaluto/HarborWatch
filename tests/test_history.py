@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from history import continuous_hours, hourly_series
+from history import continuous_hours, hourly_series, longest_run
 
 T0 = datetime(2026, 10, 5, 8, tzinfo=UTC)
 H = lambda n: T0 + timedelta(hours=n)
@@ -40,3 +40,14 @@ def test_no_data_no_rows():
 ])
 def test_continuous_hours(values, hours):
     assert continuous_hours(values) == hours
+
+
+@pytest.mark.parametrize("values, hours", [
+    ([1, 2, None, 3, 4, 5, None, 6], 3),           # the longest run, not the last one
+    ([None, None], 0),
+    ([1, float("nan"), 2, 3], 2),
+    ([0, 0, 0], 3),                                # 0 vessels at anchor is still data
+    ([], 0),
+])
+def test_longest_run(values, hours):
+    assert longest_run(values) == hours

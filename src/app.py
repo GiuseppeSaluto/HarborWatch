@@ -12,8 +12,8 @@ from pymongo import MongoClient
 
 import config
 from classify import COMMERCIAL, ship_category
-from history import continuous_hours, hourly_series
-from optimize import not_planned, plan_berths, prepare, service_minutes, stays_pipeline
+from history import continuous_hours, hourly_series, longest_run
+from optimize import not_planned, plan_berths, prepare, service_minutes, stays_pipeline, trusted_stay
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
 ICONS = {"at_berth": ":material/directions_boat:", "anchored": ":material/anchor:", "underway": ":material/sailing:"}
@@ -170,7 +170,10 @@ def stay_estimates():
                    for v in db.vessels.find({"length": {"$gte": config.MIN_STAY_VESSEL_M}}, {"mmsi": 1, "ship_type": 1})}
     stays = [(d["mmsi"], d["start"], d["end"]) for d in db.positions.aggregate(stays_pipeline(config.STALE_MINUTES))
              if d["end"] - d["start"] >= timedelta(minutes=config.MIN_STAY_MINUTES)]
-    return service_minutes(stays, category_of, config.SERVICE_MINUTES, config.MIN_STAYS)
+    history = congestion_history()
+    window = 60 * longest_run(history["anchored"].tolist() if not history.empty else [])
+    minutes, counts = service_minutes(stays, category_of, config.SERVICE_MINUTES, config.MIN_STAYS, window)
+    return minutes, counts, window
 
 
 def berth_plan(df, now):
@@ -181,7 +184,7 @@ def berth_plan(df, now):
                "length": r["length"], "since": r["since"], "location": [r["lon"], r["lat"]],
                "arrival_seen": r.get("since_seen") is True}  # missing (older documents) = not seen
               for _, r in rows.iterrows()]
-    service, counts = stay_estimates()
+    service, counts, window = stay_estimates()
     vessels, berths = prepare(states, config.BERTHS, now, service)
     plan = plan_berths(vessels, berths)
     if not plan:
@@ -204,8 +207,12 @@ def berth_plan(df, now):
     busy = sum(1 for b in berths if b["free_from"])
     st.caption(f"Minimizes the total wait over {len(berths)} berths ({busy} busy now) in data/berths.json. "
                "Expected stays: " + ", ".join(
-                   f"{c} {m // 60} h " + (f"(median of {counts[c]} observed)" if counts[c] >= config.MIN_STAYS
-                                         else f"(default, {counts[c]} of {config.MIN_STAYS} stays observed)")
+                   f"{c} {m // 60} h " + (
+                       f"(median of {counts[c]} observed)"
+                       if trusted_stay(counts[c], config.SERVICE_MINUTES[c], window, config.MIN_STAYS)
+                       else f"(default: {counts[c]} of {config.MIN_STAYS} stays observed, "
+                            f"{window // 60} of {config.STAY_WINDOW_FACTOR * config.SERVICE_MINUTES[c] // 60} h "
+                            "of continuous collection)")
                    for c, m in service.items()) + ". Vessels we did not see arrive are assumed halfway through their stay.")
 
 
@@ -226,8 +233,8 @@ def data_status(now):
     history = congestion_history()
     hours = continuous_hours(history["anchored"].tolist() if not history.empty else [])
 
-    _, counts = stay_estimates()
-    measured = [c for c, n in counts.items() if n >= config.MIN_STAYS]
+    _, counts, window = stay_estimates()
+    measured = [c for c, n in counts.items() if trusted_stay(n, config.SERVICE_MINUTES[c], window, config.MIN_STAYS)]
     stats = db.command("dbStats")
     used_mb = (stats["dataSize"] + stats["indexSize"]) / 2**20
 
@@ -243,7 +250,9 @@ def data_status(now):
                             "The berth plan and the stay estimates need days of it.")
         cols[2].metric("Measured stays", f"{len(measured)} of {len(counts)} categories",
                        help=", ".join(f"{c}: {n} of {config.MIN_STAYS} stays" for c, n in counts.items()) +
-                            ". Categories below the threshold use the default stay.")
+                            f"; longest continuous collection {window // 60} h. A category needs {config.MIN_STAYS} "
+                            f"stays and a continuous window of {config.STAY_WINDOW_FACTOR}x its default stay; "
+                            "otherwise it uses the default.")
         cols[3].metric("Atlas storage", f"{used_mb:.1f} MB", help=f"of {config.STORAGE_LIMIT_MB} MB "
                        f"({100 * used_mb / config.STORAGE_LIMIT_MB:.1f}%); the TTL keeps it near ~70 MB")
 

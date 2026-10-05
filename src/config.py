@@ -55,6 +55,10 @@ BERTHS = json.loads((Path(__file__).parent.parent / "data" / "berths.json").read
 SERVICE_MINUTES = {"cargo": 24 * 60, "tanker": 36 * 60, "passenger": 12 * 60}
 # Measured stays replace a default once a category has this many complete ones in history.
 MIN_STAYS = 5
+# ...and once the history holds a continuous collection window of at least this many times the
+# default stay: in a few-hour window only short stays can be seen from arrival to departure,
+# so their median would drag a 24 h cargo call down to about an hour.
+STAY_WINDOW_FACTOR = 2
 # Only stays of ships the plan is about count: harbour boats (16-30 m "passenger" craft)
 # dock for minutes and dragged the passenger median down to 8 minutes on 2026-10-04.
 MIN_STAY_VESSEL_M = 50

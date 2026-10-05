@@ -99,17 +99,28 @@ def stays_pipeline(max_gap_minutes):
     ]
 
 
-def service_minutes(stays, category_of, defaults, min_stays):
-    """Median stay per category, in whole minutes, once a category has min_stays stays.
+def trusted_stay(count, default_minutes, window_minutes, min_stays):
+    """Whether a category's measured stays can replace its default.
 
-    Returns (minutes, counts), both keyed like defaults; categories with too few stays keep
-    their default.
+    Needs min_stays complete stays, seen in a continuous collection window at least
+    STAY_WINDOW_FACTOR times the default stay (window_minutes None skips that condition).
+    """
+    long_enough = window_minutes is None or window_minutes >= config.STAY_WINDOW_FACTOR * default_minutes
+    return count >= min_stays and long_enough
+
+
+def service_minutes(stays, category_of, defaults, min_stays, window_minutes=None):
+    """Median stay per category, in whole minutes, where trusted_stay allows it.
+
+    window_minutes: the longest continuous collection window in the history the stays come
+    from. Returns (minutes, counts), both keyed like defaults; other categories keep their default.
     """
     lengths = {category: [] for category in defaults}
     for mmsi, start, end in stays:
         if category_of.get(mmsi) in lengths:
             lengths[category_of[mmsi]].append((end - start).total_seconds() / 60)
-    minutes = {c: int(statistics.median(ls)) if len(ls) >= min_stays else defaults[c] for c, ls in lengths.items()}
+    minutes = {c: int(statistics.median(ls)) if trusted_stay(len(ls), defaults[c], window_minutes, min_stays)
+               else defaults[c] for c, ls in lengths.items()}
     return minutes, {c: len(ls) for c, ls in lengths.items()}
 
 

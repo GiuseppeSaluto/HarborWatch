@@ -36,7 +36,7 @@ AISStream (WebSocket) ──> ingest.py ──> MongoDB Atlas ──> app.py (St
 - **Classification** (`src/classify.py`): a vessel is *underway* above 0.5 knots; otherwise it is *at berth* when within 100 m of the coastline, whose OpenStreetMap trace follows the quay edges in Genoa, and *at anchor* when further out. The AIS ship type separates commercial traffic (cargo, tanker, passenger) from tugs, pilot boats and yachts: during the 2026 Genoa Boat Show dozens of 50-90 m superyachts were moored in port, and length alone could not tell them from cargo ships.
 - **Storage under free-tier limits**: MongoDB Atlas M0 allows 512 MB and 100 operations per second. Positions are sampled to one per vessel per minute, written in batches every 10 seconds, and expire after 7 days through a TTL index. The ingestion logs the used and projected storage (about 70 MB at steady state, measured).
 - **State history**: each vessel's current state is upserted with the time it began, computed inside MongoDB with a pipeline update so that it survives restarts. After a gap in the data the start time is reset and flagged as "not seen", instead of silently counting the gap as waiting time.
-- **Berth plan** (`src/optimize.py`): berths come from `data/berths.json`, 29 berths with their length and accepted vessel categories, each marked as official or observed. Each waiting vessel gets an optional interval on every compatible berth; `NoOverlap` per berth keeps one vessel at a time, including the vessels already moored. Expected stays are measured from complete stays in the history once a category has enough of them, and fall back to per-category defaults until then.
+- **Berth plan** (`src/optimize.py`): berths come from `data/berths.json`, 29 berths with their length and accepted vessel categories, each marked as official or observed. Each waiting vessel gets an optional interval on every compatible berth; `NoOverlap` per berth keeps one vessel at a time, including the vessels already moored. Expected stays are measured from complete stays in the history once a category has enough of them, seen in a continuous collection window at least twice its default stay (in a few-hour window only short stays can be seen from start to end), and fall back to per-category defaults until then.
 
 ## Run it
 
@@ -57,7 +57,7 @@ cp .env.example .env           # then fill in AISSTREAM_API_KEY and MONGODB_URI
 pytest
 ```
 
-89 test cases run in under a second, without network or database, on every push (GitHub Actions, Python 3.12 and 3.14). They cover message validation against recorded AIS messages, classification thresholds, the optimizer (expected optima brute-forced on small hand-built cases), the berth occupancy and stay measurement logic. Most tests for the optimizer and the stay measurement were written from the function contracts alone, without reading the implementation, and the core logic was checked by deliberately breaking it and watching the tests fail.
+About a hundred test cases run in under a second, without network or database, on every push (GitHub Actions, Python 3.12 and 3.14). They cover message validation against recorded AIS messages, classification thresholds, the optimizer (expected optima brute-forced on small hand-built cases), the berth occupancy and stay measurement logic, and the hourly history behind the charts. `tests/check_stays_pipeline.py` checks against Atlas that the MongoDB aggregation finding the stays agrees with the tested Python definition. Most tests for the optimizer and the stay measurement were written from the function contracts alone, without reading the implementation, and the core logic was checked by deliberately breaking it and watching the tests fail.
 
 ## Known limitations
 
@@ -69,7 +69,7 @@ pytest
 ## Project layout
 
 ```
-src/        ingest.py, classify.py, optimize.py, app.py, config.py
+src/        ingest.py, classify.py, optimize.py, history.py, app.py, config.py
 data/       coastline.json (OSM coastline), berths.json (berths of the port)
 tests/      one test file per module with non-trivial logic, plus recorded AIS messages
 run.sh      ingestion + dashboard in one command
