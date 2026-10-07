@@ -44,11 +44,9 @@ def static_msg(mmsi=MMSI, ship_type=70):
             "Message": {"ShipStaticData": data}}
 
 
-# Assumption: ingest.parse(msg) takes the decoded JSON dict of one AISStream
-# message and returns either None (message discarded by validation) or the
-# document to store. It may return the document directly or as a (kind, doc)
-# pair; both shapes are accepted by `_doc`. The spec only says "validazione
-# (parse)" in ingest.py.
+# Interface (spec section 13): ingest.parse(msg) takes the decoded JSON dict of
+# one AISStream message and returns (collection, doc), or None when validation
+# discards the message.
 
 def _parse(msg):
     try:
@@ -179,3 +177,15 @@ def test_position_and_static_are_distinguishable():
     sta = _doc(_parse(static_msg()))
     assert "location" in pos
     assert "ship_type" in sta and "location" not in sta
+
+
+def test_position_goes_to_positions_collection():
+    # Assumption: the collection element of the pair is the MongoDB collection
+    # name from spec section 6.
+    collection, _ = ingest.parse(position_msg())
+    assert collection == "positions"
+
+
+def test_static_data_goes_to_vessels_collection():
+    collection, _ = ingest.parse(static_msg())
+    assert collection == "vessels"

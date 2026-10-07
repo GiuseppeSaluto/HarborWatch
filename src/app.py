@@ -199,8 +199,8 @@ def berth_plan(df, now):
             "moors at": f"{local(now + timedelta(minutes=p['start'])):%a %H:%M %Z}",
             "more wait": fmt(timedelta(minutes=p["wait"])),
         } for p in plan]), hide_index=True)
-    # Say who is left out instead of dropping them silently (a 251 m tanker fits no observed
-    # Multedo berth, for instance).
+    # Say who is left out instead of dropping them silently: a vessel longer than every berth
+    # we know of in its category, or one whose length AIS has not told us yet.
     left_out = [f"{names[v['mmsi']]} ({v['category']}, " + (f"{v['length']:g} m" if v["length"] else "length unknown") + ")"
                 for v in unfit]
     if left_out:

@@ -12,34 +12,16 @@ import pytest
 import config
 import optimize
 
-try:
-    import history
-except ImportError:  # pragma: no cover
-    history = None
-
-
-def _resolve(name):
-    # Assumption: the spec places measure_stays and service_minutes in optimize.py;
-    # the project also has a history.py module, so the function is looked up in
-    # optimize first and then in history.
-    for module in (optimize, history):
-        fn = getattr(module, name, None) if module else None
-        if callable(fn):
-            return fn
-    raise AttributeError(f"{name} not found in optimize or history")
-
-
 T0 = datetime(2026, 10, 5, 6, 0, tzinfo=timezone.utc)
 STEP = timedelta(minutes=1)
 
 
-# Assumption: measure_stays(positions) takes an iterable of position dicts
-# {"mmsi", "ts" (aware datetime), "state"} (the stored `positions` fields of
-# spec section 6) and returns a list of complete berth stays, each a dict with
-# "mmsi", "start" and "end" (datetimes). A stay is an `at_berth` run.
+# Interface (spec section 13): optimize.measure_stays(positions) takes position
+# dicts {"mmsi", "ts" (aware datetime), "state"} and returns complete berth stays
+# as dicts {"mmsi", "start", "end"}. A stay is an `at_berth` run.
 
 def measure(positions):
-    return _resolve("measure_stays")(positions)
+    return optimize.measure_stays(positions)
 
 
 def track(mmsi, segments, start=T0, step=STEP):
@@ -170,20 +152,17 @@ def test_one_vessel_gap_does_not_affect_another():
 
 
 # --- service_minutes -------------------------------------------------------------------
-# Assumption: service_minutes(stays, window_minutes) takes a list of stay dicts
-# {"category", "length" (metres), "minutes"} plus the length of the continuous
-# collection window in minutes, and returns a dict category -> minutes covering
-# at least cargo, tanker and passenger. The length (>= 50 m) and duration
-# (>= 60 min) filters are assumed to be applied here (the spec states them next
-# to service_minutes); if they live in measure_stays instead, the filter tests
-# below will fail for that reason.
+# Interface (spec section 13): optimize.service_minutes(stays, window_minutes)
+# takes stay dicts {"category", "length" (metres), "minutes"} plus the length of
+# the continuous collection window in minutes, and returns a dict
+# category -> minutes. The >= 50 m and >= 60 min filters are applied here.
 
 DEFAULTS = config.SERVICE_MINUTES
 BIG_WINDOW = 10 * max(DEFAULTS.values())
 
 
 def service(stays, window=BIG_WINDOW):
-    return _resolve("service_minutes")(stays, window)
+    return optimize.service_minutes(stays, window)
 
 
 def stays(category, durations, length=150):

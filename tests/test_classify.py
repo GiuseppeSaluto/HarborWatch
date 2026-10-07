@@ -19,24 +19,10 @@ FAR = 1000.0      # metres, typical anchorage distance from the coast (850-1100 
 NEAR = 20.0       # metres, typical moored distance from the coast (2-45 m)
 
 
-def _resolve(module, *names):
-    for name in names:
-        fn = getattr(module, name, None)
-        if callable(fn):
-            return fn
-    raise AttributeError(f"{module.__name__} has none of {names}")
-
-
-# Assumption: the state function is called one of the names below and takes
-# (sog_knots, nav_status, coast_distance_m) positionally, returning the state
-# string. The spec says "stato di una nave" is a pure function in classify.py
-# using speed, nav status and distance from the coastline, but names neither.
-_state_fn = _resolve(classify, "vessel_state", "classify_state", "state",
-                     "classify", "ship_state", "get_state")
-
-
+# Interface (spec section 13): classify.classify(sog, nav_status, coast_distance_m)
+# returns "underway", "at_berth" or "anchored".
 def state(sog, nav_status, distance_m):
-    return _state_fn(sog, nav_status, distance_m)
+    return classify.classify(sog, nav_status, distance_m)
 
 
 # --- thresholds come from config ----------------------------------------------------
@@ -116,13 +102,11 @@ def test_just_below_speed_threshold_far_is_anchored():
 
 
 # --- distance from the coastline -------------------------------------------------------
-# Assumption: the distance function is called one of the names below, takes
-# (lon, lat, lines) where `lines` is a GeoJSON MultiLineString coordinate list
-# (list of lines, each a list of [lon, lat]), and returns metres. The spec says
-# the coastline is a GeoJSON MultiLineString scanned segment by segment.
+# Interface (spec section 13): classify.coast_distance_m(lon, lat, lines), where
+# `lines` is a GeoJSON MultiLineString coordinate list (list of lines, each a
+# list of [lon, lat]); returns metres.
 
-_dist_fn = _resolve(classify, "coast_distance_m", "distance_to_coast",
-                    "coast_distance", "distance_from_coast", "distance_to_coastline")
+_dist_fn = classify.coast_distance_m
 
 LAT0 = 44.40
 SEGMENT = [[[8.90, LAT0], [8.92, LAT0]]]          # one east-west segment

@@ -8,7 +8,7 @@ from datetime import timedelta
 from ortools.sat.python import cp_model
 
 import config
-from classify import COMMERCIAL
+from classify import COMMERCIAL, ship_category
 
 # Hard cap on solving time; past it CP-SAT returns the best plan found so far.
 # Known limit: ~10 vessels solve to optimality in milliseconds, 20+ hit the cap and return
@@ -142,9 +142,9 @@ def service_minutes(stays, window_minutes=None, defaults=None, min_stays=None):
 def prepare(vessels, berths, now, service=None):
     """Turn the current vessel states into plan_berths input.
 
-    vessels: dicts with mmsi, state, category, length (m or None), since (UTC datetime the
-        vessel entered its state), since_seen (False when since is only when we first saw it,
-        default True), lon and lat.
+    vessels: dicts with mmsi, state, ship_type (or an already computed category), length
+        (m or None), since (UTC datetime the vessel entered its state), since_seen (False when
+        since is only when we first saw it, default True), lon and lat.
     berths: as in data/berths.json (name, zone, length, categories, lon, lat). now: UTC datetime.
     service: expected stay in minutes per category, default config.SERVICE_MINUTES.
     Returns (ships, berths, unfit):
@@ -158,6 +158,7 @@ def prepare(vessels, berths, now, service=None):
     # Known limit: one expected stay per category, and moored vessels are matched to the nearest
     # compatible berth. Upgrade path: stays per vessel size or terminal, real berth geometries.
     service = service or config.SERVICE_MINUTES
+    vessels = [v if v.get("category") else {**v, "category": ship_category(v.get("ship_type"))} for v in vessels]
     known = [v for v in vessels if v["category"] in COMMERCIAL and v["length"]]
     berths = [{**b, "free_from": 0} for b in berths]
     occupied = set()

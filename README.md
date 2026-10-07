@@ -57,7 +57,7 @@ cp .env.example .env           # then fill in AISSTREAM_API_KEY and MONGODB_URI
 pytest
 ```
 
-About a hundred test cases run in under a second, without network or database, on every push (GitHub Actions, Python 3.12 and 3.14). They cover message validation against recorded AIS messages, classification thresholds, the optimizer (expected optima brute-forced on small hand-built cases), the berth occupancy and stay measurement logic, and the hourly history behind the charts. `tests/check_stays_pipeline.py` checks against Atlas that the MongoDB aggregation finding the stays agrees with the tested Python definition. Most tests for the optimizer and the stay measurement were written from the function contracts alone, without reading the implementation, and the core logic was checked by deliberately breaking it and watching the tests fail.
+The suite runs in under a second, without network or database, on every push (GitHub Actions, Python 3.12 and 3.14). It covers message validation, classification thresholds and the coastline distance, the berth data, the optimizer (expected optima checked by brute force on small cases), berth occupancy, stay measurement and the hourly history behind the charts. The tests are written by a separate agent from the specification alone, without reading the implementation; the code adapts to them. `tests/check_stays_pipeline.py` checks against a real MongoDB that the aggregation finding the stays agrees with the tested Python definition.
 
 ## Known limitations
 
