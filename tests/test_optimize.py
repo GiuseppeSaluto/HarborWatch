@@ -1,253 +1,378 @@
-import copy
-from datetime import UTC, datetime, timedelta
+"""Black-box tests for optimize.plan_berths and optimize.prepare (spec section 9).
+
+Requires OR-Tools (CP-SAT), which plan_berths uses; no network or MongoDB.
+Times in plans are integer minutes from "now" (minute 0).
+"""
+
+import itertools
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 import config
-from classify import COMMERCIAL
-from optimize import not_planned, plan_berths, prepare
+import optimize
+
+# --- data shape assumptions ---------------------------------------------------------
+# Assumption: plan_berths(ships, berths) takes
+#   ships:  list of dicts {"mmsi", "length", "category", "arrival", "duration"}
+#           (arrival and duration in minutes),
+#   berths: list of dicts {"name", "length", "categories", "free_from"}, where
+#           "free_from" (minutes, optional / 0 = free) is the end of the fixed block
+#           of an already-berthed vessel (spec: "a fixed block from minute 0 to its
+#           free_from"),
+# and returns a list of dicts {"mmsi", "berth" (berth name), "start", "end"}.
+# The spec describes the model but names none of these keys.
 
 
-def V(name, length, arrival, service, category="cargo"):
-    return {"name": name, "length": length, "category": category, "arrival": arrival, "service": service}
+def ship(mmsi, length=150, category="cargo", arrival=0, duration=60):
+    return {"mmsi": mmsi, "length": length, "category": category,
+            "arrival": arrival, "duration": duration}
 
 
-def B(name, length, accepts=("cargo",)):
-    return {"name": name, "length": length, "accepts": list(accepts)}
+def berth(name, length=300, categories=("cargo",), free_from=0):
+    return {"name": name, "length": length, "categories": list(categories),
+            "free_from": free_from}
 
 
-def check_plan(plan, vessels, berths):
-    """Contract every plan must respect; returns the total wait."""
-    vs = {v["name"]: v for v in vessels}
-    bs = {b["name"]: b for b in berths}
-    assert sorted(p["vessel"] for p in plan) == sorted(vs)  # every vessel exactly once
-    assert [p["start"] for p in plan] == sorted(p["start"] for p in plan)
-    for p in plan:
-        v = vs[p["vessel"]]
-        assert v["length"] <= bs[p["berth"]]["length"]
-        assert v["category"] in bs[p["berth"]]["accepts"]
-        assert p["start"] >= v["arrival"]
-        assert p["end"] == p["start"] + v["service"]
-        assert p["wait"] == p["start"] - v["arrival"]
-    for a in plan:
-        for b in plan:
-            if a is not b and a["berth"] == b["berth"]:
-                assert a["end"] <= b["start"] or b["end"] <= a["start"]  # no overlap on a berth
-    return sum(p["wait"] for p in plan)
+def plan(ships, berths):
+    result = optimize.plan_berths(ships, berths)
+    return {p["mmsi"]: p for p in result}
 
 
-# Expected optima brute-forced (all berth assignments x all orders, earliest start each);
-# a test-writing agent derived them from the spec alone, without seeing optimize.py.
-@pytest.mark.parametrize("vessels, berths, optimum", [
-    # Serving the late but quick HUGE first beats first-come-first-served (100 vs 110).
-    ([V("BIG", 250, 0, 60), V("S1", 150, 0, 60), V("S2", 150, 0, 60), V("HUGE", 280, 10, 30)],
-     [B("A", 200), B("B", 300)], 100),
-    # Leaving the berth idle 1 min for QUICK is optimal (2 vs 99 for any no-idle greedy).
-    ([V("BIG", 100, 0, 100), V("QUICK", 100, 1, 1)], [B("Q1", 200)], 2),
-    # "First free berth" greedy puts SMALL on LONG and makes LARGE wait 60.
-    ([V("SMALL", 100, 0, 60), V("LARGE", 250, 0, 60)], [B("LONG", 300), B("SHORT", 150)], 0),
-    # A berth exactly as long as the vessel is usable.
-    ([V("FIT", 200, 0, 30)], [B("Q1", 200)], 0),
-    # A late vessel starts at its arrival, not when the berth frees up.
-    ([V("EARLY", 100, 0, 10), V("LATE", 100, 50, 10)], [B("Q1", 150)], 0),
-    # Mixed instance where first-come-first-served gives 160.
-    ([V("A", 280, 0, 120), V("B", 120, 5, 30), V("C", 150, 10, 20),
-      V("D", 290, 15, 60), V("E", 90, 20, 10), V("F", 200, 25, 45)],
-     [B("LONG", 300), B("MID", 200), B("SHORT", 120)], 95),
-    # Tankers only use the oil berth even when the cargo berth is idle: T2 waits 60 (0 if
-    # the category were ignored).
-    ([V("T1", 100, 0, 60, "tanker"), V("T2", 100, 0, 60, "tanker")],
-     [B("OIL", 300, ["tanker"]), B("QUAY", 300)], 60),
-])
-def test_plan_is_valid_and_optimal(vessels, berths, optimum):
-    assert check_plan(plan_berths(vessels, berths), vessels, berths) == optimum
+def total_delay(by_mmsi, ships):
+    return sum(by_mmsi[s["mmsi"]]["start"] - s["arrival"] for s in ships)
 
 
-def test_too_long_vessels_are_all_named():
-    vessels = [V("TUGBOAT", 100, 0, 10), V("HUGE", 301, 0, 10), V("GIANT", 400, 5, 10)]
-    with pytest.raises(ValueError) as e:
-        plan_berths(vessels, [B("LONG", 300), B("SHORT", 150)])
-    assert "HUGE" in str(e.value) and "GIANT" in str(e.value) and "TUGBOAT" not in str(e.value)
+def check_valid(by_mmsi, ships, berths):
+    """Every invariant the spec states for a plan."""
+    berths_by_name = {b["name"]: b for b in berths}
+    assert set(by_mmsi) == {s["mmsi"] for s in ships}, "each ship planned exactly once"
+    for s in ships:
+        p = by_mmsi[s["mmsi"]]
+        b = berths_by_name[p["berth"]]
+        assert b["length"] >= s["length"], "berth long enough"
+        assert s["category"] in b["categories"], "berth accepts category"
+        assert p["start"] >= s["arrival"], "no start before arrival"
+        assert p["start"] >= b.get("free_from", 0), "no overlap with berthed vessel"
+        assert p["end"] - p["start"] == s["duration"], "interval length = duration"
+    for name in berths_by_name:
+        ivs = sorted((p["start"], p["end"]) for p in by_mmsi.values() if p["berth"] == name)
+        for (s1, e1), (s2, _) in zip(ivs, ivs[1:]):
+            assert s2 >= e1, f"overlap on berth {name}"
 
 
-def test_vessel_with_no_berth_for_its_category():
-    with pytest.raises(ValueError, match="CRUISER"):
-        plan_berths([V("CRUISER", 100, 0, 10, "passenger")], [B("QUAY", 300)])
+def brute_force_optimum(ships, berths):
+    """Minimum total delay by enumerating berth choice and per-berth order."""
+    best = None
+    names = [b["name"] for b in berths]
+    bmap = {b["name"]: b for b in berths}
+    for choice in itertools.product(names, repeat=len(ships)):
+        ok = all(bmap[c]["length"] >= s["length"] and s["category"] in bmap[c]["categories"]
+                 for s, c in zip(ships, choice))
+        if not ok:
+            continue
+        groups = {n: [s for s, c in zip(ships, choice) if c == n] for n in names}
+        total = 0
+        for n, group in groups.items():
+            best_group = None
+            for order in itertools.permutations(group):
+                t = bmap[n].get("free_from", 0)
+                d = 0
+                for s in order:
+                    start = max(t, s["arrival"])
+                    d += start - s["arrival"]
+                    t = start + s["duration"]
+                best_group = d if best_group is None else min(best_group, d)
+            total += best_group or 0
+        best = total if best is None else min(best, total)
+    return best
 
 
-def test_not_planned_lists_who_prepare_left_out():
-    now = datetime(2026, 10, 5, tzinfo=UTC)
-    s = lambda name, state="anchored", category="tanker", length=200: {
-        "name": name, "state": state, "category": category, "length": length, "since": now, "location": [8.9, 44.4]}
-    states = [s("FITS"), s("TOO LONG", length=400), s("NO LENGTH", length=None), s("CARGO", category="cargo"),
-              s("YACHT", category="pleasure"), s("MOORED", state="at_berth", length=400)]
-    vessels, _ = prepare(states, [B("OIL", 300, ["tanker"]) | {"location": [8.9, 44.4]}], now)
-    # Left out: too long, unknown length, no berth for its category. Not listed: planned,
-    # non-commercial, or not at anchor.
-    assert [v["name"] for v in not_planned(states, vessels)] == ["TOO LONG", "NO LENGTH", "CARGO"]
+# --- validity --------------------------------------------------------------------------
+
+def test_single_ship_single_free_berth_starts_at_arrival():
+    ships = [ship(1, arrival=0)]
+    berths = [berth("A")]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert by[1]["start"] == 0
+    assert by[1]["berth"] == "A"
 
 
-def test_berths_file():
-    names = [b["name"] for b in config.BERTHS]
-    assert len(names) == len(set(names))  # berth names are plan keys
-    for b in config.BERTHS:
-        assert b["length"] > 0 and b["accepts"] and set(b["accepts"]) <= COMMERCIAL, b["name"]
+def test_start_not_before_late_arrival():
+    ships = [ship(1, arrival=30)]
+    berths = [berth("A")]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert by[1]["start"] == 30
 
 
-# Tests below were written by a test-writing agent from the prepare/free_from contract alone,
-# without seeing optimize.py.
-NOW = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
-WEST, EAST = [8.79, 44.42], [8.92, 44.40]  # two port areas ~10 km apart
-NEAR_EAST = [8.919, 44.401]
+def test_no_overlap_on_single_berth():
+    ships = [ship(i, duration=40) for i in range(1, 5)]
+    berths = [berth("A")]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert total_delay(by, ships) == 0 + 40 + 80 + 120
 
 
-def ship(name, state, category="cargo", length=200, minutes_ago=0, location=EAST):
-    return {"name": name, "state": state, "category": category, "length": length,
-            "since": NOW - timedelta(minutes=minutes_ago), "location": location}
+def test_length_constraint_sends_long_ship_to_long_berth():
+    ships = [ship(1, length=250), ship(2, length=150)]
+    berths = [berth("LONG", length=300), berth("SHORT", length=200)]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert by[1]["berth"] == "LONG"
+    assert by[2]["berth"] == "SHORT"
+    assert total_delay(by, ships) == 0
 
 
-def berth(name, location, length=300, accepts=("cargo",)):
-    return {"name": name, "area": name, "length": length, "accepts": list(accepts),
-            "location": location, "source": "test"}
+def test_long_ship_waits_rather_than_using_short_free_berth():
+    ships = [ship(1, length=250, duration=60), ship(2, length=250, duration=60)]
+    berths = [berth("LONG", length=300), berth("SHORT", length=200)]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert {by[1]["berth"], by[2]["berth"]} == {"LONG"}
+    assert total_delay(by, ships) == 60
 
 
-@pytest.mark.parametrize("berths, arrival, start", [
-    ([{"name": "A", "length": 300, "accepts": ["cargo"], "free_from": 30}], 0, 30),   # free_from ignored
-    ([{"name": "A", "length": 300, "accepts": ["cargo"], "free_from": 30}], 40, 40),  # start forced to free_from even if arrived later
-    ([{"name": "A", "length": 300, "accepts": ["cargo"]}], 5, 5),                     # missing free_from not treated as 0
-    ([{"name": "A", "length": 300, "accepts": ["cargo"], "free_from": 50},
-      {"name": "B", "length": 300, "accepts": ["cargo"]}], 0, 0),                     # picks occupied berth over free one
-])
-def test_plan_berths_free_from(berths, arrival, start):
-    # Bugs: see per-case comments.
-    [row] = plan_berths([{"name": "V", "length": 200, "category": "cargo", "arrival": arrival, "service": 60}], berths)
-    assert (row["start"], row["end"], row["wait"]) == (start, start + 60, start - arrival)
+def test_berth_length_equal_to_ship_length_is_compatible():
+    ships = [ship(1, length=300)]
+    berths = [berth("A", length=300)]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert by[1]["berth"] == "A"
 
 
-@pytest.mark.parametrize("state", [
-    ship("underway", "underway"),
-    ship("moored", "at_berth"),
-    ship("pleasure", "anchored", category="pleasure"),
-    ship("service", "anchored", category="service"),
-    ship("unknown", "anchored", category="unknown"),
-    ship("no length", "anchored", length=None),
-    ship("too long", "anchored", length=301),
-    ship("no tanker berth", "anchored", category="tanker"),
-])
-def test_prepare_excludes(state):
-    # Bug: a non-anchored, non-commercial, unknown-length or fitting-nowhere vessel reaches plan_berths.
-    vessels, _ = prepare([state], [berth("A", EAST)], NOW)
-    assert vessels == []
+def test_category_constraint_tanker_avoids_container_berth():
+    ships = [ship(1, category="tanker", duration=60), ship(2, category="tanker", duration=60)]
+    berths = [berth("CONTAINER", categories=("cargo",)),
+              berth("OIL", categories=("tanker",))]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert by[1]["berth"] == by[2]["berth"] == "OIL"
+    assert total_delay(by, ships) == 60
 
 
-@pytest.mark.parametrize("category", ["cargo", "tanker", "passenger"])
-def test_prepare_anchored_vessel(category):
-    # Bug: wrong arrival (e.g. since-based instead of 0), wrong service lookup, or missing keys.
-    berths = [berth("A", EAST, accepts=["cargo", "tanker", "passenger"])]
-    vessels, _ = prepare([ship("V", "anchored", category=category, minutes_ago=90)], berths, NOW)
-    assert vessels == [{"name": "V", "length": 200, "category": category,
-                        "arrival": 0, "service": config.SERVICE_MINUTES[category]}]
+def test_mixed_categories_use_their_own_berths():
+    ships = [ship(1, category="passenger"), ship(2, category="cargo"), ship(3, category="tanker")]
+    berths = [berth("CRUISE", categories=("passenger",)),
+              berth("BOX", categories=("cargo",)),
+              berth("OIL", categories=("tanker",))]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert (by[1]["berth"], by[2]["berth"], by[3]["berth"]) == ("CRUISE", "BOX", "OIL")
+    assert total_delay(by, ships) == 0
 
 
-@pytest.mark.parametrize("seconds_ago, expected", [
-    (600, [config.SERVICE_MINUTES["cargo"] - 10]),
-    (630, [config.SERVICE_MINUTES["cargo"] - 11, config.SERVICE_MINUTES["cargo"] - 10]),  # rounding direction left open
-    ((config.SERVICE_MINUTES["cargo"] + 100) * 60, [0]),                           # overstayed: clamped, not negative
-])
-def test_prepare_free_from_arithmetic(seconds_ago, expected):
-    # Bug: wrong sign/units in since + service - now, missing clamp at 0, or a float/timedelta result.
-    moored = ship("M", "at_berth") | {"since": NOW - timedelta(seconds=seconds_ago)}
-    _, [b] = prepare([moored], [berth("A", EAST)], NOW)
-    assert type(b["free_from"]) is int and b["free_from"] in expected
+def test_occupied_berth_blocks_until_free_from():
+    ships = [ship(1)]
+    berths = [berth("A", free_from=100)]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert by[1]["start"] == 100
 
 
-def test_prepare_nearest_then_next_free_berth():
-    # Bug: moored vessel takes the first listed berth instead of the nearest, or two vessels share one berth.
-    s = config.SERVICE_MINUTES["cargo"]
-    berths = [berth("W", WEST), berth("E1", EAST), berth("E2", EAST)]
-    _, out = prepare([ship("M1", "at_berth", location=NEAR_EAST, minutes_ago=0)], berths, NOW)
-    free = {b["name"]: b["free_from"] for b in out}
-    assert free["W"] == 0 and sorted([free["E1"], free["E2"]]) == [0, s]
-
-    moored = [ship("M1", "at_berth", location=NEAR_EAST, minutes_ago=0),
-              ship("M2", "at_berth", location=NEAR_EAST, minutes_ago=10)]
-    _, out = prepare(moored, berths, NOW)
-    free = {b["name"]: b["free_from"] for b in out}
-    assert free["W"] == 0 and sorted([free["E1"], free["E2"]]) == [s - 10, s]
+def test_free_compatible_berth_preferred_over_occupied_one():
+    ships = [ship(1)]
+    berths = [berth("BUSY", free_from=100), berth("FREE")]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert by[1]["berth"] == "FREE"
+    assert by[1]["start"] == 0
 
 
-def test_prepare_occupancy_respects_compatibility():
-    # Bug: moored vessel occupies the nearest berth even if wrong category/too short; non-commercial,
-    # unknown-length or anchored vessels occupy berths; a vessel with no free compatible berth crashes or double-books.
-    berths = [berth("cargo here", EAST), berth("tanker far", WEST, accepts=["tanker"]),
-              berth("short here", NEAR_EAST, length=150), berth("long far", WEST, length=400)]
-    states = [ship("T", "at_berth", category="tanker", location=EAST),
-              ship("big", "at_berth", length=350, location=NEAR_EAST),
-              ship("pleasure", "at_berth", category="pleasure", location=EAST),
-              ship("unknown length", "at_berth", length=None, location=EAST),
-              ship("waiting", "anchored", location=EAST),
-              ship("T2", "at_berth", category="tanker", location=WEST, minutes_ago=5)]  # tanker berth already taken
-    _, out = prepare(states, berths, NOW)
-    free = {b["name"]: b["free_from"] for b in out}
-    assert free["cargo here"] == 0 and free["short here"] == 0
-    assert free["long far"] == config.SERVICE_MINUTES["cargo"]
-    assert free["tanker far"] in (config.SERVICE_MINUTES["tanker"], config.SERVICE_MINUTES["tanker"] - 5)
+# --- optimality ------------------------------------------------------------------------
+
+def test_shortest_job_first_on_one_berth():
+    # Durations 30, 10, 20 all arriving at 0: optimum order 10, 20, 30 -> 0+10+30 = 40.
+    ships = [ship(1, duration=30), ship(2, duration=10), ship(3, duration=20)]
+    berths = [berth("A")]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert total_delay(by, ships) == 40
+    assert by[2]["start"] == 0
 
 
-def test_prepare_berths_not_mutated_and_feed_plan_berths():
-    # Bug: prepare writes free_from into the caller's berths (e.g. config.BERTHS), drops berth keys,
-    # or its output is not usable by plan_berths.
-    before = copy.deepcopy(config.BERTHS)
-    vessels, out = prepare([], config.BERTHS, NOW)
-    assert config.BERTHS == before and vessels == []
-    assert sorted(out, key=lambda b: b["name"]) == sorted((b | {"free_from": 0} for b in config.BERTHS), key=lambda b: b["name"])
-
-    berths = [berth("A", EAST)]
-    states = [ship("moored", "at_berth", minutes_ago=0), ship("waiting", "anchored")]
-    vessels, out = prepare(states, berths, NOW)
-    assert "free_from" not in berths[0]
-    [row] = plan_berths(vessels, out)
-    assert (row["vessel"], row["start"]) == ("waiting", config.SERVICE_MINUTES["cargo"])
+def test_two_berths_split_load():
+    ships = [ship(i, duration=60) for i in range(1, 5)]
+    berths = [berth("A"), berth("B")]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert total_delay(by, ships) == 120
 
 
-# arrival_seen tests, also written by the test agent from the contract alone.
-ARRIVAL_NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
-ONE_BERTH = [{"name": "B1", "area": "A", "length": 400, "accepts": ["cargo", "tanker"],
-           "location": [8.9, 44.4], "source": "test"}]
+def test_late_arrival_does_not_block_earlier_ship():
+    # Ship 2 arrives at 50; ship 1 (duration 40) fits before it with no delay.
+    ships = [ship(1, arrival=0, duration=40), ship(2, arrival=50, duration=40)]
+    berths = [berth("A")]
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert total_delay(by, ships) == 0
 
 
-def moored_at(category, minutes_ago, **extra):
-    return dict(name="M", state="at_berth", category=category, length=200,
-                since=ARRIVAL_NOW - timedelta(minutes=minutes_ago), location=[8.9, 44.4], **extra)
+CASES = [
+    # (ships, berths)
+    ([ship(1, duration=50, length=250), ship(2, duration=20), ship(3, duration=70, arrival=10)],
+     [berth("L", length=300), berth("S", length=200, free_from=30)]),
+    ([ship(1, category="tanker", duration=90), ship(2, duration=30), ship(3, duration=30, arrival=5),
+      ship(4, category="tanker", duration=20, arrival=15)],
+     [berth("MIX", categories=("cargo", "tanker"), free_from=20), berth("BOX")]),
+    ([ship(1, duration=100), ship(2, duration=10, arrival=20), ship(3, duration=10, arrival=25),
+      ship(4, duration=60, length=280)],
+     [berth("A", length=300), berth("B", length=200, free_from=50)]),
+    ([ship(i, duration=d, arrival=a) for i, (d, a) in enumerate([(45, 0), (15, 5), (30, 10), (60, 0), (20, 40)], 1)],
+     [berth("A"), berth("B", free_from=25)]),
+]
 
 
-# Catches: arrival_seen ignored, absent key treated as False, or half the stay not clamped at 0.
-@pytest.mark.parametrize("category", ["cargo", "tanker"])
-@pytest.mark.parametrize("extra, fraction", [({}, 1), ({"arrival_seen": True}, 1), ({"arrival_seen": False}, 0.5)])
-@pytest.mark.parametrize("elapsed_of_half", [-60, 30])  # 60 min before / 30 min past the halfway point
-def test_free_from_full_or_half_stay(category, extra, fraction, elapsed_of_half):
-    full = config.SERVICE_MINUTES[category]
-    elapsed = full // 2 + elapsed_of_half
-    _, berths = prepare([moored_at(category, elapsed, **extra)], ONE_BERTH, ARRIVAL_NOW)
-    assert berths[0]["occupied_by"] == "M"
-    assert berths[0]["free_from"] == max(0, int(full * fraction) - elapsed)
+@pytest.mark.parametrize("ships,berths", CASES)
+def test_plan_matches_brute_force_optimum(ships, berths):
+    by = plan(ships, berths)
+    check_valid(by, ships, berths)
+    assert total_delay(by, ships) == brute_force_optimum(ships, berths)
 
 
-# Catches: halving config.SERVICE_MINUTES instead of the service dict passed to prepare.
-def test_custom_service_is_halved():
-    service = {c: m + 200 for c, m in config.SERVICE_MINUTES.items()}
-    _, berths = prepare([moored_at("cargo", 60, arrival_seen=False)], ONE_BERTH, ARRIVAL_NOW, service)
-    assert berths[0]["free_from"] == service["cargo"] // 2 - 60
+# --- prepare ---------------------------------------------------------------------------
+# Assumption: optimize.prepare(vessels, berths, now) takes
+#   vessels: list of merged state+static dicts {"mmsi", "state", "since" (aware
+#            datetime), "since_seen", "length", "ship_type", "location" (GeoJSON)}
+#            (also "category", "lat", "lon" are supplied in case the code reads those),
+#   berths:  list of berth dicts as in config.BERTHS, each with one point
+#            (supplied as "point" [lon, lat], "lon"/"lat" and "location"),
+#   now:     aware datetime,
+# and returns a 3-tuple (waiting_ships, berths_with_free_from, unfit_ships):
+# ships in the plan_berths shape with arrival 0, berths with "free_from" in minutes
+# from now, and the anchored commercial ships that fit no known berth.
+# Durations come from config.SERVICE_MINUTES (defaults: cargo 24 h).
+
+NOW = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
+GENOA = (8.90, 44.40)
 
 
-# Catches: arrival_seen=False leaking into anchored vessels (halved service or non-zero arrival).
-def test_anchored_vessel_unaffected():
-    def anchored(**extra):
-        return dict(name="A", state="anchored", category="cargo", length=200,
-                    since=ARRIVAL_NOW - timedelta(minutes=90), location=[8.8, 44.3], **extra)
-    base, _ = prepare([anchored()], ONE_BERTH, ARRIVAL_NOW)
-    unseen, _ = prepare([anchored(arrival_seen=False)], ONE_BERTH, ARRIVAL_NOW)
-    strip = lambda vs: [{k: v for k, v in x.items() if k != "arrival_seen"} for x in vs]
-    assert len(base) == 1
-    assert config.SERVICE_MINUTES["cargo"] in base[0].values()
-    assert strip(unseen) == strip(base)
+def vessel(mmsi, state="anchored", length=200, ship_type=70, since_minutes_ago=60,
+           since_seen=True, lon=GENOA[0], lat=GENOA[1]):
+    cat = {7: "cargo", 8: "tanker", 6: "passenger"}.get(ship_type // 10 if ship_type else 0, "other")
+    return {"mmsi": mmsi, "state": state, "since": NOW - timedelta(minutes=since_minutes_ago),
+            "since_seen": since_seen, "length": length, "ship_type": ship_type,
+            "category": cat, "location": {"type": "Point", "coordinates": [lon, lat]},
+            "lon": lon, "lat": lat}
+
+
+def pberth(name, lon, lat, length=300, categories=("cargo",)):
+    return {"name": name, "zone": name, "length": length, "categories": list(categories),
+            "source": "official", "point": [lon, lat], "lon": lon, "lat": lat,
+            "location": {"type": "Point", "coordinates": [lon, lat]}}
+
+
+def _mmsi(x):
+    return x if isinstance(x, int) else x["mmsi"]
+
+
+def run_prepare(vessels, berths):
+    waiting, out_berths, unfit = optimize.prepare(vessels, berths, NOW)
+    return ({_mmsi(w): w for w in waiting},
+            {b["name"]: b for b in out_berths},
+            {_mmsi(u) for u in unfit})
+
+
+def test_prepare_keeps_anchored_commercial_ship_with_arrival_zero():
+    waiting, _, _ = run_prepare([vessel(1)], [pberth("A", *GENOA)])
+    assert set(waiting) == {1}
+    assert waiting[1]["arrival"] == 0
+
+
+def test_prepare_waiting_ship_gets_category_duration():
+    waiting, _, _ = run_prepare([vessel(1, ship_type=80)],
+                                [pberth("OIL", *GENOA, categories=("tanker",))])
+    assert waiting[1]["duration"] == config.SERVICE_MINUTES["tanker"]
+
+
+def test_prepare_drops_non_commercial_anchored_ship():
+    waiting, _, unfit = run_prepare([vessel(1, ship_type=52)], [pberth("A", *GENOA)])
+    assert 1 not in waiting
+    assert 1 not in unfit
+
+
+def test_prepare_drops_anchored_ship_with_unknown_length():
+    waiting, _, _ = run_prepare([vessel(1, length=None)], [pberth("A", *GENOA)])
+    assert 1 not in waiting
+
+
+def test_prepare_drops_underway_ship():
+    waiting, _, unfit = run_prepare([vessel(1, state="underway")], [pberth("A", *GENOA)])
+    assert 1 not in waiting and 1 not in unfit
+
+
+def test_prepare_lists_ship_too_long_for_every_berth_as_unfit():
+    waiting, _, unfit = run_prepare([vessel(1, length=400)], [pberth("A", *GENOA, length=300)])
+    assert 1 not in waiting
+    assert 1 in unfit
+
+
+def test_prepare_lists_ship_with_no_category_berth_as_unfit():
+    waiting, _, unfit = run_prepare([vessel(1, ship_type=80)],
+                                    [pberth("BOX", *GENOA, categories=("cargo",))])
+    assert 1 not in waiting
+    assert 1 in unfit
+
+
+def test_prepare_free_berths_have_no_block():
+    _, berths, _ = run_prepare([vessel(1)], [pberth("A", *GENOA)])
+    assert berths["A"].get("free_from", 0) == 0
+
+
+def test_prepare_berthed_ship_occupies_until_since_plus_duration():
+    # Seen arrival 2 h ago, cargo default 24 h -> free in 22 h.
+    v = vessel(9, state="at_berth", since_minutes_ago=120, since_seen=True)
+    _, berths, _ = run_prepare([v], [pberth("A", *GENOA)])
+    assert berths["A"]["free_from"] == config.SERVICE_MINUTES["cargo"] - 120
+
+
+def test_prepare_unseen_arrival_assumes_half_stay():
+    # Arrival not seen: since is taken as mid-stay -> free at since + 12 h.
+    v = vessel(9, state="at_berth", since_minutes_ago=120, since_seen=False)
+    _, berths, _ = run_prepare([v], [pberth("A", *GENOA)])
+    assert berths["A"]["free_from"] == config.SERVICE_MINUTES["cargo"] // 2 - 120
+
+
+def test_prepare_berthed_ship_takes_nearest_compatible_berth():
+    v = vessel(9, state="at_berth", lon=8.80, lat=44.40)
+    berths_in = [pberth("FAR", 8.95, 44.40), pberth("NEAR", 8.801, 44.40)]
+    _, berths, _ = run_prepare([v], berths_in)
+    assert berths["NEAR"].get("free_from", 0) > 0
+    assert berths["FAR"].get("free_from", 0) == 0
+
+
+def test_prepare_berthed_ship_skips_nearer_incompatible_berth():
+    v = vessel(9, state="at_berth", ship_type=80, lon=8.80, lat=44.40)
+    berths_in = [pberth("BOX", 8.801, 44.40, categories=("cargo",)),
+                 pberth("OIL", 8.95, 44.40, categories=("tanker",))]
+    _, berths, _ = run_prepare([v], berths_in)
+    assert berths["OIL"].get("free_from", 0) > 0
+    assert berths["BOX"].get("free_from", 0) == 0
+
+
+def test_prepare_two_berthed_ships_do_not_share_a_berth():
+    # The second one takes the nearest *free* compatible berth.
+    a = vessel(8, state="at_berth", lon=8.80, lat=44.40)
+    b = vessel(9, state="at_berth", lon=8.80, lat=44.40)
+    berths_in = [pberth("NEAR", 8.801, 44.40), pberth("NEXT", 8.81, 44.40)]
+    _, berths, _ = run_prepare([a, b], berths_in)
+    assert berths["NEAR"].get("free_from", 0) > 0
+    assert berths["NEXT"].get("free_from", 0) > 0
+
+
+def test_prepare_non_commercial_berthed_ship_occupies_nothing():
+    v = vessel(9, state="at_berth", ship_type=52)
+    _, berths, _ = run_prepare([v], [pberth("A", *GENOA)])
+    assert berths["A"].get("free_from", 0) == 0
+
+
+def test_prepare_output_feeds_plan_berths():
+    vs = [vessel(1), vessel(2, length=250),
+          vessel(9, state="at_berth", since_minutes_ago=1380, lon=8.801, lat=44.40)]
+    bs = [pberth("A", 8.801, 44.40), pberth("B", 8.95, 44.40)]
+    waiting, berths, _ = optimize.prepare(vs, bs, NOW)
+    by = {p["mmsi"]: p for p in optimize.plan_berths(waiting, berths)}
+    assert set(by) == {1, 2}
+    # Berth A is free after 60 minutes; one ship goes to B at 0, the other to A at 60.
+    assert sorted(p["start"] for p in by.values()) == [0, 60]

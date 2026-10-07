@@ -7,14 +7,15 @@ import config
 MOORED = 5  # AIS navigational status "moored"
 
 
-def distance_to_coast_m(lon, lat, coastline=config.COASTLINE):
-    """Shortest distance in metres from a point to a GeoJSON MultiLineString."""
+def coast_distance_m(lon, lat, lines=config.COASTLINE["coordinates"]):
+    """Shortest distance in metres from a point to lines given as GeoJSON MultiLineString
+    coordinates: a list of lines, each a list of [lon, lat]."""
     # Local equirectangular projection: accurate to well under 1% across a port.
     kx, ky = 111_320 * math.cos(math.radians(lat)), 110_540
     best = math.inf
     # Known limit: linear scan over ~4k segments, a few ms per vessel. If it gets slow,
     # store the coastline in MongoDB and use $near on a 2dsphere index.
-    for line in coastline["coordinates"]:
+    for line in lines:
         for (ax, ay), (bx, by) in zip(line, line[1:]):
             ax, ay, bx, by = (ax - lon) * kx, (ay - lat) * ky, (bx - lon) * kx, (by - lat) * ky
             dx, dy = bx - ax, by - ay

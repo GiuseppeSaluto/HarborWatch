@@ -13,7 +13,7 @@ from pymongo import MongoClient
 import config
 from classify import COMMERCIAL, ship_category
 from history import continuous_hours, hourly_series, longest_run
-from optimize import not_planned, plan_berths, prepare, service_minutes, stays_pipeline, trusted_stay
+from optimize import plan_berths, prepare, service_minutes, stays_pipeline, trusted_stay, usable_stays
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
 ICONS = {"at_berth": ":material/directions_boat:", "anchored": ":material/anchor:", "underway": ":material/sailing:"}
@@ -165,42 +165,44 @@ def congestion_history():
 def stay_estimates():
     """Expected stay per category, measured from the position history where possible."""
     db = get_db()
+    vessels = {v["mmsi"]: v for v in db.vessels.find({}, {"mmsi": 1, "ship_type": 1, "length": 1})}
     # The stays are found inside MongoDB: only they travel, not the whole position history.
-    category_of = {v["mmsi"]: ship_category(v.get("ship_type"))
-                   for v in db.vessels.find({"length": {"$gte": config.MIN_STAY_VESSEL_M}}, {"mmsi": 1, "ship_type": 1})}
-    stays = [(d["mmsi"], d["start"], d["end"]) for d in db.positions.aggregate(stays_pipeline(config.STALE_MINUTES))
-             if d["end"] - d["start"] >= timedelta(minutes=config.MIN_STAY_MINUTES)]
+    stays = [{"category": ship_category(vessels.get(d["mmsi"], {}).get("ship_type")),
+              "length": vessels.get(d["mmsi"], {}).get("length"),
+              "minutes": (d["end"] - d["start"]).total_seconds() / 60}
+             for d in db.positions.aggregate(stays_pipeline(config.STALE_MINUTES))]
     history = congestion_history()
     window = 60 * longest_run(history["anchored"].tolist() if not history.empty else [])
-    minutes, counts = service_minutes(stays, category_of, config.SERVICE_MINUTES, config.MIN_STAYS, window)
-    return minutes, counts, window
+    counts = {c: sum(1 for s in usable_stays(stays) if s["category"] == c) for c in config.SERVICE_MINUTES}
+    return service_minutes(stays, window), counts, window
 
 
 def berth_plan(df, now):
     """Phase 2: proposed berth and start time for every commercial vessel at anchor."""
     st.subheader("Proposed berth plan")
     rows = df.astype(object).where(df.notna(), None)  # NaN (unknown length, name) -> None
-    states = [{"name": r["name"] or str(r["mmsi"]), "state": r["state"], "category": r["type"],
-               "length": r["length"], "since": r["since"], "location": [r["lon"], r["lat"]],
-               "arrival_seen": r.get("since_seen") is True}  # missing (older documents) = not seen
-              for _, r in rows.iterrows()]
+    vessels = [{"mmsi": r["mmsi"], "state": r["state"], "category": r["type"], "length": r["length"],
+                "since": r["since"], "since_seen": r.get("since_seen") is True,  # missing (older documents) = not seen
+                "lon": r["lon"], "lat": r["lat"]}
+               for _, r in rows.iterrows()]
+    names = {r["mmsi"]: r["name"] or str(r["mmsi"]) for _, r in rows.iterrows()}
     service, counts, window = stay_estimates()
-    vessels, berths = prepare(states, config.BERTHS, now, service)
-    plan = plan_berths(vessels, berths)
+    ships, berths, unfit = prepare(vessels, config.BERTHS, now, service)
+    plan = plan_berths(ships, berths)
     if not plan:
         st.write("No commercial vessel at anchor that fits a known berth.")
         return
-    st.altair_chart(gantt(plan, berths, now), width="stretch")
+    st.altair_chart(gantt(plan, berths, now, names), width="stretch")
     with st.expander("Table view"):
         st.dataframe(pd.DataFrame([{
-            "vessel": p["vessel"], "berth": p["berth"],
+            "vessel": names[p["mmsi"]], "berth": p["berth"],
             "moors at": f"{local(now + timedelta(minutes=p['start'])):%a %H:%M %Z}",
             "more wait": fmt(timedelta(minutes=p["wait"])),
         } for p in plan]), hide_index=True)
     # Say who is left out instead of dropping them silently (a 251 m tanker fits no observed
     # Multedo berth, for instance).
-    left_out = [f"{s['name']} ({s['category']}, " + (f"{s['length']:g} m" if s["length"] else "length unknown") + ")"
-                for s in not_planned(states, vessels)]
+    left_out = [f"{names[v['mmsi']]} ({v['category']}, " + (f"{v['length']:g} m" if v["length"] else "length unknown") + ")"
+                for v in unfit]
     if left_out:
         st.caption("Not planned, no known berth fits (berth lengths in data/berths.json are partly observed, "
                    "so they can be too short) or length unknown: " + ", ".join(left_out))
@@ -287,12 +289,12 @@ def port_map(df):
     })
     by_area = {}
     for b in config.BERTHS:
-        by_area.setdefault(b["area"], []).append(b)
+        by_area.setdefault(b["zone"], []).append(b)
     areas = pd.DataFrame([{
-        "position": bs[0]["location"], "name": area,
+        "position": [bs[0]["lon"], bs[0]["lat"]], "name": area,
         "title": area,
         "line1": f"{len(bs)} berth{'s' * (len(bs) > 1)}: {', '.join(str(b['length']) for b in bs)} m",
-        "line2": f"accepts {', '.join(bs[0]['accepts'])}",
+        "line2": f"accepts {', '.join(bs[0]['categories'])}",
     } for area, bs in by_area.items()])
     # Direct labels only where they fit: the passenger terminals and SECH sit a few hundred
     # metres apart, so their names would pile up; hovering their rings tells them apart.
@@ -338,13 +340,14 @@ def congestion_chart(history):
     return (line + alone + rule + points).properties(height=220)
 
 
-def gantt(plan, berths, now):
+def gantt(plan, berths, now, names):
     """One row per berth: the moored vessel's estimated stay, then the proposed moorings."""
     at = lambda minutes: now + timedelta(minutes=minutes)
     bars = pd.DataFrame(
-        [{"berth": b["name"], "vessel": b["occupied_by"], "kind": MOORED, "from": now, "to": at(b["free_from"])}
+        [{"berth": b["name"], "vessel": names.get(b["occupied_by"], str(b["occupied_by"])), "kind": MOORED,
+          "from": now, "to": at(b["free_from"])}
          for b in berths if b["free_from"]] +
-        [{"berth": p["berth"], "vessel": p["vessel"], "kind": PROPOSED, "from": at(p["start"]), "to": at(p["end"])}
+        [{"berth": p["berth"], "vessel": names[p["mmsi"]], "kind": PROPOSED, "from": at(p["start"]), "to": at(p["end"])}
          for p in plan])
     # Tooltips have no scale, so they get the local times as text; the bars get chart_time.
     bars["from_text"], bars["to_text"] = (bars[t].map(lambda d: f"{local(d):%a %H:%M}") for t in ("from", "to"))

@@ -19,19 +19,20 @@ SOLVER_SECONDS = 10
 
 def fits(vessel, berth):
     """A berth is compatible if it is long enough and accepts the vessel category."""
-    return berth["length"] >= vessel["length"] and vessel["category"] in berth["accepts"]
+    return berth["length"] >= vessel["length"] and vessel["category"] in berth["categories"]
 
 
-def measure_stays(positions, max_gap_minutes):
-    """Complete berth stays in a position history: (mmsi, start, end) for each.
+def measure_stays(positions, max_gap_minutes=None):
+    """Complete berth stays in a position history: {mmsi, start, end} for each.
 
-    positions: dicts with mmsi, ts and state, sorted by (mmsi, ts). A stay counts only if we
-    saw the vessel arrive and leave, with no gap over max_gap_minutes from the position
-    before it to the one after it; end is the first position after the berth.
+    positions: dicts with mmsi, ts and state, in any order. A stay counts only if we saw the
+    vessel arrive and leave, with no gap over max_gap_minutes (default STALE_MINUTES) from
+    the position before it to the one after it; end is the first position after the berth.
     """
-    gap = timedelta(minutes=max_gap_minutes)
+    gap = timedelta(minutes=config.STALE_MINUTES if max_gap_minutes is None else max_gap_minutes)
     stays = []
-    for mmsi, group in itertools.groupby(positions, key=lambda p: p["mmsi"]):
+    ordered = sorted(positions, key=lambda p: (p["mmsi"], p["ts"]))
+    for mmsi, group in itertools.groupby(ordered, key=lambda p: p["mmsi"]):
         ps = list(group)
         raw = [p["state"] for p in ps]
         # A one-position blip (e.g. a moored vessel briefly over the speed threshold) is noise:
@@ -48,7 +49,7 @@ def measure_stays(positions, max_gap_minutes):
                 j += 1
             window = ps[i - 1:j + 2] if i > 0 else []  # the run plus one position each side
             if j + 1 < len(ps) and window and all(b["ts"] - a["ts"] <= gap for a, b in zip(window, window[1:])):
-                stays.append((mmsi, ps[i]["ts"], ps[j + 1]["ts"]))
+                stays.append({"mmsi": mmsi, "start": ps[i]["ts"], "end": ps[j + 1]["ts"]})
             i = j + 1
     return stays
 
@@ -109,108 +110,118 @@ def trusted_stay(count, default_minutes, window_minutes, min_stays):
     return count >= min_stays and long_enough
 
 
-def service_minutes(stays, category_of, defaults, min_stays, window_minutes=None):
-    """Median stay per category, in whole minutes, where trusted_stay allows it.
+def usable_stays(stays):
+    """The stays that say something about berth calls.
 
-    window_minutes: the longest continuous collection window in the history the stays come
-    from. Returns (minutes, counts), both keyed like defaults; other categories keep their default.
+    stays: dicts with category, length (m, or None) and minutes. Harbour boats under
+    MIN_STAY_VESSEL_M and stays under MIN_STAY_MINUTES are left out: on 2026-10-04 they
+    dragged the passenger median down to 8 minutes.
     """
-    lengths = {category: [] for category in defaults}
-    for mmsi, start, end in stays:
-        if category_of.get(mmsi) in lengths:
-            lengths[category_of[mmsi]].append((end - start).total_seconds() / 60)
-    minutes = {c: int(statistics.median(ls)) if trusted_stay(len(ls), defaults[c], window_minutes, min_stays)
-               else defaults[c] for c, ls in lengths.items()}
-    return minutes, {c: len(ls) for c, ls in lengths.items()}
+    return [s for s in stays
+            if (s["length"] or 0) >= config.MIN_STAY_VESSEL_M and s["minutes"] >= config.MIN_STAY_MINUTES]
 
 
-def prepare(states, berths, now, service=None):
+def service_minutes(stays, window_minutes=None, defaults=None, min_stays=None):
+    """Expected stay per category, in whole minutes: the median of the usable stays where
+    trusted_stay allows it, else the default.
+
+    stays: dicts with category, length and minutes. window_minutes: the longest continuous
+    collection window in the history they come from. defaults and min_stays default to
+    config.SERVICE_MINUTES and config.MIN_STAYS. Returns a dict keyed like defaults.
+    """
+    defaults = config.SERVICE_MINUTES if defaults is None else defaults
+    min_stays = config.MIN_STAYS if min_stays is None else min_stays
+    minutes = {category: [] for category in defaults}
+    for stay in usable_stays(stays):
+        if stay["category"] in minutes:
+            minutes[stay["category"]].append(stay["minutes"])
+    return {c: int(statistics.median(ms)) if trusted_stay(len(ms), defaults[c], window_minutes, min_stays)
+            else defaults[c] for c, ms in minutes.items()}
+
+
+def prepare(vessels, berths, now, service=None):
     """Turn the current vessel states into plan_berths input.
 
-    states: dicts with name, state, category, length (m or None), since (UTC datetime the
-        vessel entered its state), location ([lon, lat]) and optionally arrival_seen
-        (default True; False when since is only when we first saw the vessel moored).
-    berths: as in data/berths.json. now: UTC datetime.
-    service: expected stay in minutes per category (from service_minutes), default config.SERVICE_MINUTES.
-    Returns (vessels, berths): the commercial anchored vessels that fit some berth, waiting
-    from minute 0 with the expected stay of their category; and copies of the berths
-    with free_from, the minutes until the vessel moored there is expected to leave, and
-    occupied_by, its name, on the berths a moored vessel was matched to.
+    vessels: dicts with mmsi, state, category, length (m or None), since (UTC datetime the
+        vessel entered its state), since_seen (False when since is only when we first saw it,
+        default True), lon and lat.
+    berths: as in data/berths.json (name, zone, length, categories, lon, lat). now: UTC datetime.
+    service: expected stay in minutes per category, default config.SERVICE_MINUTES.
+    Returns (ships, berths, unfit):
+    - ships: the commercial anchored vessels that fit some berth, in the plan_berths shape,
+      waiting from minute 0 for the expected stay of their category;
+    - berths: copies with free_from, the minutes until the vessel moored there is expected to
+      leave, and occupied_by, its mmsi, on the berths a moored vessel was matched to;
+    - unfit: the commercial anchored vessels left out (no fitting berth, or length unknown),
+      so that the dashboard lists them instead of dropping them silently.
     """
     # Known limit: one expected stay per category, and moored vessels are matched to the nearest
     # compatible berth. Upgrade path: stays per vessel size or terminal, real berth geometries.
     service = service or config.SERVICE_MINUTES
-    known = [s for s in states if s["category"] in COMMERCIAL and s["length"]]
+    known = [v for v in vessels if v["category"] in COMMERCIAL and v["length"]]
     berths = [{**b, "free_from": 0} for b in berths]
     occupied = set()
-    for s in (s for s in known if s["state"] == "at_berth"):
-        free = [b for b in berths if b["name"] not in occupied and fits(s, b)]
+    for v in (v for v in known if v["state"] == "at_berth"):
+        free = [b for b in berths if b["name"] not in occupied and fits(v, b)]
         if not free:
-            continue  # more vessels than berths we know of in that area
-        berth = min(free, key=lambda b: math.dist(b["location"], s["location"]))
+            continue  # more vessels than berths we know of in that zone
+        berth = min(free, key=lambda b: math.dist((b["lon"], b["lat"]), (v["lon"], v["lat"])))
         occupied.add(berth["name"])
-        berth["occupied_by"] = s["name"]
-        stay = service[s["category"]]
+        berth["occupied_by"] = v["mmsi"]
+        stay = service[v["category"]]
         # Arrival not seen (e.g. moored before the ingestion started): assume it was halfway
         # through its stay when we first saw it, instead of just arrived.
         # Known limit: a coin-flip guess; the upgrade is reading the arrival from the history.
-        leaves = s["since"] + timedelta(minutes=stay if s.get("arrival_seen", True) else stay / 2)
+        leaves = v["since"] + timedelta(minutes=stay if v.get("since_seen", True) else stay / 2)
         berth["free_from"] = max(0, int((leaves - now).total_seconds() // 60))
-    vessels = [{"name": s["name"], "length": s["length"], "category": s["category"],
-                "arrival": 0, "service": service[s["category"]]}
-               for s in known if s["state"] == "anchored" and any(fits(s, b) for b in berths)]
-    return vessels, berths
+    ships = [{"mmsi": v["mmsi"], "length": v["length"], "category": v["category"],
+              "arrival": 0, "duration": service[v["category"]]}
+             for v in known if v["state"] == "anchored" and any(fits(v, b) for b in berths)]
+    planned = {ship["mmsi"] for ship in ships}
+    unfit = [v for v in vessels
+             if v["state"] == "anchored" and v["category"] in COMMERCIAL and v["mmsi"] not in planned]
+    return ships, berths, unfit
 
 
-def not_planned(states, vessels):
-    """Commercial vessels at anchor that prepare left out (no fitting berth, or length unknown).
+def plan_berths(ships, berths):
+    """Assign each ship a berth and a start time, minimizing the total wait.
 
-    states as for prepare, vessels as prepare returned them. Shown in the dashboard so that
-    nobody is dropped silently.
-    """
-    planned = {v["name"] for v in vessels}
-    return [s for s in states if s["state"] == "anchored" and s["category"] in COMMERCIAL and s["name"] not in planned]
-
-
-def plan_berths(vessels, berths):
-    """Assign each vessel a berth and a start time, minimizing the total wait.
-
-    vessels: dicts with name, length (m), category (cargo, tanker, passenger),
-        arrival and service (whole minutes from now).
-    berths: dicts with name, length (m) and accepts (list of categories), as in data/berths.json,
+    ships: dicts with mmsi, length (m), category (cargo, tanker, passenger),
+        arrival and duration (whole minutes from now).
+    berths: dicts with name, length (m) and categories (list), as in data/berths.json,
         plus optional free_from (minutes from now until the berth is free, default 0).
-    Returns one dict per vessel (vessel, berth, start, end, wait), sorted by start.
+    Returns one dict per ship (mmsi, berth, start, end, wait), sorted by start.
     """
     # Known limit: deterministic model from spec section 9. No tides, pilotage windows or
     # commercial priorities.
-    if not vessels:
+    if not ships:
         return []
-    homeless = [v["name"] for v in vessels if not any(fits(v, b) for b in berths)]
+    homeless = [str(v["mmsi"]) for v in ships if not any(fits(v, b) for b in berths)]
     if homeless:
         raise ValueError(f"no berth long enough and accepting the category for: {', '.join(homeless)}")
 
     model = cp_model.CpModel()
     # Worst case: every vessel queues on one berth after the last arrival or berth release.
-    latest = max([v["arrival"] for v in vessels] + [b.get("free_from", 0) for b in berths])
-    horizon = latest + sum(v["service"] for v in vessels)
+    latest = max([v["arrival"] for v in ships] + [b.get("free_from", 0) for b in berths])
+    horizon = latest + sum(v["duration"] for v in ships)
 
     starts, chosen = {}, {}
     per_berth = {b["name"]: [] for b in berths}
     for b in berths:
         if b.get("free_from", 0) > 0:  # the moored vessel, as a fixed block from minute 0
             per_berth[b["name"]].append(model.new_fixed_size_interval_var(0, b["free_from"], f"busy_{b['name']}"))
-    for v in vessels:
-        start = model.new_int_var(v["arrival"], horizon, f"start_{v['name']}")  # no start before arrival
-        starts[v["name"]] = start
+    for v in ships:
+        start = model.new_int_var(v["arrival"], horizon, f"start_{v['mmsi']}")  # no start before arrival
+        starts[v["mmsi"]] = start
         for b in berths:
             if not fits(v, b):
                 continue  # only compatible berths get an interval
-            here = model.new_bool_var(f"{v['name']}_at_{b['name']}")
+            here = model.new_bool_var(f"{v['mmsi']}_at_{b['name']}")
             interval = model.new_optional_fixed_size_interval_var(
-                start, v["service"], here, f"{v['name']}_on_{b['name']}")
-            chosen[v["name"], b["name"]] = here
+                start, v["duration"], here, f"{v['mmsi']}_on_{b['name']}")
+            chosen[v["mmsi"], b["name"]] = here
             per_berth[b["name"]].append(interval)
-        model.add_exactly_one(here for (name, _), here in chosen.items() if name == v["name"])
+        model.add_exactly_one(here for (mmsi, _), here in chosen.items() if mmsi == v["mmsi"])
 
     for intervals in per_berth.values():
         model.add_no_overlap(intervals)  # an interval only counts when its vessel is placed there
@@ -225,9 +236,9 @@ def plan_berths(vessels, berths):
         raise RuntimeError(f"no plan found: {solver.status_name(status)}")
 
     plan = []
-    for v in vessels:
-        start = solver.value(starts[v["name"]])
-        berth = next(b for (name, b), here in chosen.items() if name == v["name"] and solver.value(here))
-        plan.append({"vessel": v["name"], "berth": berth, "start": start,
-                     "end": start + v["service"], "wait": start - v["arrival"]})
+    for v in ships:
+        start = solver.value(starts[v["mmsi"]])
+        berth = next(b for (mmsi, b), here in chosen.items() if mmsi == v["mmsi"] and solver.value(here))
+        plan.append({"mmsi": v["mmsi"], "berth": berth, "start": start,
+                     "end": start + v["duration"], "wait": start - v["arrival"]})
     return sorted(plan, key=lambda p: p["start"])

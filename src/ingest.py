@@ -13,7 +13,7 @@ from pymongo import ASCENDING, GEOSPHERE, AsyncMongoClient, UpdateOne
 from pymongo.errors import PyMongoError
 
 import config
-from classify import classify, distance_to_coast_m
+from classify import classify, coast_distance_m
 
 AISSTREAM_URL = "wss://stream.aisstream.io/v0/stream"
 
@@ -58,13 +58,13 @@ def parse(msg):
         # Dimension holds antenna distances to bow (A), stern (B), port (C), starboard (D); 0 = unknown.
         dim = body.get("Dimension", {})
         length = dim.get("A", 0) + dim.get("B", 0)
-        beam = dim.get("C", 0) + dim.get("D", 0)
+        width = dim.get("C", 0) + dim.get("D", 0)
         return "vessels", {
             "mmsi": mmsi,
             "name": body.get("Name", "").strip() or None,
             "imo": body.get("ImoNumber") or None,
             "length": length or None,
-            "beam": beam or None,
+            "width": width or None,
             "destination": body.get("Destination", "").strip() or None,
             "ship_type": body.get("Type") or None,  # AIS ship type code, 0 = not available
         }
@@ -90,7 +90,7 @@ def state_fields(doc):
     lon, lat = doc["location"]["coordinates"]
     return {
         "mmsi": doc["mmsi"],
-        "state": classify(doc["sog"], doc["nav_status"], distance_to_coast_m(lon, lat)),
+        "state": classify(doc["sog"], doc["nav_status"], coast_distance_m(lon, lat)),
         "ts": doc["ts"],
         "location": doc["location"],
         "sog": doc["sog"],
