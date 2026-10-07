@@ -120,7 +120,7 @@ async def flush(db, positions, vessels, states):
     If a write fails, the buffers not yet written are kept and retried at the next flush.
     """
     if positions:
-        # ponytail: a partial failure here (rare: retryable writes cover network blips)
+        # Known limit: a partial failure here (rare: retryable writes cover network blips)
         # would re-insert the already written docs next time and hit duplicate _id errors.
         await db.positions.insert_many(positions, ordered=False)
         positions.clear()
@@ -221,7 +221,7 @@ async def main():
                         elif collection == "vessels":
                             # Dict keyed by mmsi: only the latest static data per vessel is written.
                             vessels[doc["mmsi"]] = UpdateOne({"mmsi": doc["mmsi"]}, {"$set": doc}, upsert=True)
-                    # ponytail: flush is checked only when a message arrives; fine for a busy port.
+                    # Known limit: flush is checked only when a message arrives; fine for a busy port.
                     # Awaiting it here keeps the buffers single-writer; incoming messages just
                     # queue in the websocket meanwhile.
                     if time.monotonic() - last_flush >= config.FLUSH_SECONDS:

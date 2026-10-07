@@ -64,7 +64,7 @@ About a hundred test cases run in under a second, without network or database, o
 - **The berth plan is a deterministic model.** No tides, drafts, pilotage windows or commercial priorities (a tanker may wait at anchor for a cargo window even with a berth free); berths are one point per terminal area. Berth data is official where published (the six Multedo oil berths, PSA terminals, cruise piers) and observed elsewhere; observed values can only be lower bounds, so a vessel that fits no known berth is listed as not planned rather than dropped.
 - **Stay durations are defaults until enough history exists.** Container and tanker calls last one or two days, so measuring them needs days of uninterrupted collection.
 - **Vessels moored before the ingestion started** are assumed to be halfway through their stay.
-- **Classification is heuristic.** A slow manoeuvring vessel can be misclassified, a vessel waiting near a quay counts as at berth, and AIS coverage has gaps. These corners are marked `ponytail:` in the code, each with its upgrade path.
+- **Classification is heuristic.** A slow manoeuvring vessel can be misclassified, a vessel waiting near a quay counts as at berth, and AIS coverage has gaps. These corners are marked `Known limit:` in the code, each with its upgrade path.
 
 ## Project layout
 

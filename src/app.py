@@ -92,7 +92,7 @@ def dashboard():
         df = df[df["type"].isin(COMMERCIAL)]
     hidden = heard - len(df)
 
-    # ponytail: `since` is the first time *we* saw the vessel in this state, so vessels
+    # Known limit: `since` is the first time *we* saw the vessel in this state, so vessels
     # already at anchor when the ingestion started show a shorter wait than the real one.
     anchored = df[df["state"] == "anchored"].assign(wait=lambda d: now - pd.to_datetime(d["since"], utc=True))
     counts = df["state"].value_counts()

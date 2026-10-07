@@ -11,7 +11,7 @@ import config
 from classify import COMMERCIAL
 
 # Hard cap on solving time; past it CP-SAT returns the best plan found so far.
-# ponytail: ~10 vessels solve to optimality in milliseconds, 20+ hit the cap and return
+# Known limit: ~10 vessels solve to optimality in milliseconds, 20+ hit the cap and return
 # a good but unproven plan. Genoa has ~6-10 at anchor. Upgrade path if needed: a tighter
 # horizon and symmetry breaking between berths of equal length.
 SOLVER_SECONDS = 10
@@ -137,7 +137,7 @@ def prepare(states, berths, now, service=None):
     with free_from, the minutes until the vessel moored there is expected to leave, and
     occupied_by, its name, on the berths a moored vessel was matched to.
     """
-    # ponytail: one expected stay per category, and moored vessels are matched to the nearest
+    # Known limit: one expected stay per category, and moored vessels are matched to the nearest
     # compatible berth. Upgrade path: stays per vessel size or terminal, real berth geometries.
     service = service or config.SERVICE_MINUTES
     known = [s for s in states if s["category"] in COMMERCIAL and s["length"]]
@@ -153,7 +153,7 @@ def prepare(states, berths, now, service=None):
         stay = service[s["category"]]
         # Arrival not seen (e.g. moored before the ingestion started): assume it was halfway
         # through its stay when we first saw it, instead of just arrived.
-        # ponytail: a coin-flip guess; the upgrade is reading the arrival from the history.
+        # Known limit: a coin-flip guess; the upgrade is reading the arrival from the history.
         leaves = s["since"] + timedelta(minutes=stay if s.get("arrival_seen", True) else stay / 2)
         berth["free_from"] = max(0, int((leaves - now).total_seconds() // 60))
     vessels = [{"name": s["name"], "length": s["length"], "category": s["category"],
@@ -181,7 +181,7 @@ def plan_berths(vessels, berths):
         plus optional free_from (minutes from now until the berth is free, default 0).
     Returns one dict per vessel (vessel, berth, start, end, wait), sorted by start.
     """
-    # ponytail: deterministic model from spec section 9. No tides, pilotage windows or
+    # Known limit: deterministic model from spec section 9. No tides, pilotage windows or
     # commercial priorities.
     if not vessels:
         return []
