@@ -114,3 +114,13 @@ def test_cruise_berths_accept_passengers():
     assert cruise, "expected Ponte dei Mille / Ponte Andrea Doria berths"
     for b in cruise:
         assert "passenger" in b["categories"], b
+
+
+def test_track_hours_is_3():
+    # Spec section 8 point 5: tracks cover the last TRACK_HOURS (3) hours.
+    assert config.TRACK_HOURS == 3
+
+
+def test_track_min_move_is_500_m():
+    # Spec section 8 point 5: only vessels that moved at least 500 m are drawn.
+    assert config.TRACK_MIN_MOVE_M == 500

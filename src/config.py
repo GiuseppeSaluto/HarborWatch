@@ -39,6 +39,11 @@ TIMEZONE = "Europe/Rome"
 # or AIS switched off). Moored and anchored vessels transmit every few minutes.
 STALE_MINUTES = 30
 
+# Map tracks: how far back to draw, and how far a vessel must have moved from its first
+# position in that window to get one (GPS jitter at berth or an anchor swing stays below).
+TRACK_HOURS = 3
+TRACK_MIN_MOVE_M = 500
+
 # Vessel state thresholds (see classify.py).
 SPEED_THRESHOLD_KN = 0.5
 QUAY_DISTANCE_M = 100

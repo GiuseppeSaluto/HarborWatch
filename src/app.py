@@ -12,7 +12,7 @@ from pymongo import MongoClient
 
 import config
 from classify import COMMERCIAL, ship_category
-from history import continuous_hours, hourly_series, longest_run
+from history import continuous_hours, hourly_series, longest_run, vessel_tracks
 from optimize import plan_berths, prepare, service_minutes, stays_pipeline, trusted_stay, usable_stays
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
@@ -112,8 +112,12 @@ def dashboard():
     cols[4].metric("Max wait at anchor", fmt(anchored["wait"].max()) if len(anchored) else "-",
                    border=True, icon=":material/schedule:", height="stretch")
 
-    st.pydeck_chart(port_map(df), height=520)
-    st.caption(legend() + " · rings: berth areas from data/berths.json · hover for details", unsafe_allow_html=True)
+    show_tracks = st.toggle("Show tracks", value=True,
+                            help=f"Paths of the last {config.TRACK_HOURS} h, for vessels that moved at least "
+                                 f"{config.TRACK_MIN_MOVE_M} m")
+    st.pydeck_chart(port_map(df, recent_tracks() if show_tracks else ([], {})), height=520)
+    st.caption(legend() + f" · lines: paths of the last {config.TRACK_HOURS} h · rings: berth areas from "
+               "data/berths.json · hover for details", unsafe_allow_html=True)
 
     st.subheader("Commercial vessels at anchor, per hour")
     history = congestion_history()
@@ -274,7 +278,21 @@ def rgb(hex_color):
     return [int(hex_color[i:i + 2], 16) for i in (1, 3, 5)]
 
 
-def port_map(df):
+@st.cache_data(ttl=60)
+def recent_tracks():
+    """vessel_tracks over the last TRACK_HOURS, plus how long each vessel has been followed."""
+    now = datetime.now(UTC)
+    # A time filter on ts: served by the ts_1 index, the 2dsphere one is not needed here.
+    positions = list(get_db().positions.find(
+        {"ts": {"$gte": now - timedelta(hours=config.TRACK_HOURS)}}, {"_id": 0, "mmsi": 1, "ts": 1, "location": 1}))
+    spans = {}
+    for p in positions:
+        first, last = spans.get(p["mmsi"], (p["ts"], p["ts"]))
+        spans[p["mmsi"]] = (min(first, p["ts"]), max(last, p["ts"]))
+    return vessel_tracks(positions, now), {m: last - first for m, (first, last) in spans.items()}
+
+
+def port_map(df, tracks_and_spans):
     """Vessels colored by state, plus one ring per berth area; both explain themselves on hover."""
     c = colors()
     known = lambda v, unit="": "?" if pd.isna(v) else f"{v:g}{unit}"
@@ -301,6 +319,15 @@ def port_map(df):
     km = lambda p, q: math.dist([p[0] * 111 * math.cos(math.radians(p[1])), p[1] * 111],
                                 [q[0] * 111 * math.cos(math.radians(q[1])), q[1] * 111])
     labeled = areas[[all(km(p, q) > 1 for q in areas["position"] if q is not p) for p in areas["position"]]]
+    # Paths only for the vessels on the map, so the commercial-only toggle applies to them too.
+    tracks, spans = tracks_and_spans
+    shown = {r["mmsi"]: r for _, r in df.iterrows()}
+    paths = pd.DataFrame([{
+        "path": path, "color": rgb(c[shown[t["mmsi"]]["state"]]),
+        "title": shown[t["mmsi"]]["name"] if isinstance(shown[t["mmsi"]]["name"], str) else str(t["mmsi"]),
+        "line1": f"path of the last {fmt(spans[t['mmsi']])}", "line2": LABELS[shown[t["mmsi"]]["state"]],
+    } for t in tracks if t["mmsi"] in shown for path in t["paths"]],
+        columns=["path", "color", "title", "line1", "line2"])
     ink = [255, 255, 255] if st.context.theme.type == "dark" else [11, 11, 11]
     return pdk.Deck(
         map_style=None,  # Streamlit's basemap, light or dark with the theme
@@ -314,6 +341,9 @@ def port_map(df):
                       pickable=True),
             pdk.Layer("TextLayer", labeled, get_position="position", get_text="name", get_size=13,
                       get_color=ink, get_pixel_offset=[0, -20]),
+            # Under the dots, so a vessel's dot stays on top of its own path.
+            pdk.Layer("PathLayer", paths, get_path="path", get_color="color", get_width=2,
+                      width_min_pixels=2, opacity=0.7, pickable=True),
             # Surface-colored ring keeps overlapping dots apart (moored ships sit side by side).
             pdk.Layer("ScatterplotLayer", vessels, get_position="position", get_fill_color="color",
                       get_radius=60, radius_min_pixels=4, stroked=True, get_line_color=rgb(c["surface"]),

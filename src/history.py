@@ -1,7 +1,11 @@
 """Pure functions on the position history shown by the dashboard."""
 
+import itertools
 import math
 from datetime import timedelta
+
+import config
+from classify import M_PER_DEG_LAT, M_PER_DEG_LON_AT_EQUATOR
 
 
 def hourly_series(covered, counts):
@@ -47,3 +51,41 @@ def longest_run(values):
         run = 0 if _missing(value) else run + 1
         best = max(best, run)
     return best
+
+
+def _metres(a, b):
+    """Distance in metres between two [lon, lat] points, on the same local plane as coast_distance_m."""
+    kx = M_PER_DEG_LON_AT_EQUATOR * math.cos(math.radians(a[1]))
+    return math.hypot((b[0] - a[0]) * kx, (b[1] - a[1]) * M_PER_DEG_LAT)
+
+
+def vessel_tracks(positions, now):
+    """The tracks to draw on the map: [{mmsi, paths}], one entry per vessel that moved.
+
+    positions: position documents (mmsi, ts, location GeoJSON Point), in any order. Only the
+    last TRACK_HOURS up to now count. A vessel is drawn if its farthest position from its
+    first one in the window is at least TRACK_MIN_MOVE_M away; its paths are split wherever
+    two consecutive positions are more than STALE_MINUTES apart, so a gap in the data is not
+    drawn as a straight line nobody sailed, and paths of a single position are dropped.
+    """
+    start = now - timedelta(hours=config.TRACK_HOURS)
+    gap = timedelta(minutes=config.STALE_MINUTES)
+    recent = sorted((p for p in positions if start <= p["ts"] <= now), key=lambda p: (p["mmsi"], p["ts"]))
+    tracks = []
+    for mmsi, group in itertools.groupby(recent, key=lambda p: p["mmsi"]):
+        fixes = list(group)
+        first = fixes[0]["location"]["coordinates"]
+        # The farthest position counts even if it ends up in a dropped single-position path.
+        if max(_metres(first, f["location"]["coordinates"]) for f in fixes) < config.TRACK_MIN_MOVE_M:
+            continue
+        paths, current = [], [fixes[0]]
+        for previous, fix in zip(fixes, fixes[1:]):
+            if fix["ts"] - previous["ts"] > gap:
+                paths.append(current)
+                current = []
+            current.append(fix)
+        paths.append(current)
+        paths = [[f["location"]["coordinates"] for f in path] for path in paths if len(path) > 1]
+        if paths:
+            tracks.append({"mmsi": mmsi, "paths": paths})
+    return tracks
