@@ -10,7 +10,7 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+from pymongo.errors import ConnectionFailure
 
 import config
 from classify import COMMERCIAL, ship_category
@@ -39,6 +39,26 @@ def chart_time(t):
     port's clock whatever the viewer's browser is set to.
     """
     return local(t).tz_localize(None).tz_localize("UTC")
+
+
+# Chart-paper grid behind the page header, after aisstream.io's home page: 1 px lines every
+# 32 px and a faint glow, fading out downwards so it never sits behind charts.
+GRID = {"light": {"line": "rgba(49, 51, 63, 0.08)", "glow": "rgba(42, 120, 214, 0.10)"},
+        "dark": {"line": "rgba(250, 250, 250, 0.06)", "glow": "rgba(57, 135, 229, 0.16)"}}
+
+
+def header_grid_css():
+    g = GRID["dark" if st.context.theme.type == "dark" else "light"]
+    return f"""<style>
+[data-testid=stMain]::before {{
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 340px; pointer-events: none;
+    background-image: linear-gradient({g["line"]} 1px, transparent 1px),
+        linear-gradient(90deg, {g["line"]} 1px, transparent 1px),
+        radial-gradient(circle at 78% 24%, {g["glow"]}, transparent 30%);
+    background-size: 32px 32px, 32px 32px, auto;
+    mask-image: linear-gradient(to bottom, black 60%, transparent);
+}}
+</style>"""
 
 
 def colors():
@@ -86,7 +106,7 @@ def dashboard():
     try:
         data_status(now)  # before the empty check: it matters most when the ingestion is down
         df = load_states(get_db(), now)
-    except PyMongoError:
+    except ConnectionFailure:  # network, DNS, IP access list; other errors must show
         st.error("Cannot reach MongoDB Atlas: see Diagnostics in the sidebar.", icon=":material/cloud_off:")
         return
     if df.empty:
@@ -294,7 +314,7 @@ def diagnostics_panel():
     try:
         last = get_db().positions.find_one(sort=[("ts", -1)], projection={"ts": 1})
         atlas_ok, age = True, datetime.now(UTC) - last["ts"] if last else None
-    except PyMongoError:
+    except ConnectionFailure:  # network, DNS, IP access list; other errors must show
         atlas_ok, age = False, None
     # The stream check opens a connection of its own, so it runs only on request, never on the
     # minute refresh: AISStream allows 3 connections per key, and the ingestion uses one.
@@ -460,5 +480,7 @@ def gantt(plan, berths, now, names):
 
 
 with st.sidebar:
+    # Here, not under the title: the style element would add a gap there. Its rules are page-wide.
+    st.markdown(header_grid_css(), unsafe_allow_html=True)
     diagnostics_panel()
 dashboard()

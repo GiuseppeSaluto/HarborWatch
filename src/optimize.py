@@ -60,9 +60,11 @@ def stays_pipeline(max_gap_minutes):
     Returns documents {mmsi, start, end}. measure_stays stays the tested definition; this
     pipeline must give the same stays (checked against it on real and random histories).
     """
-    # explain(): the first window reads the (mmsi, ts) index already in order and fetches only
-    # mmsi, ts, state; MongoDB re-sorts in memory before the later windows, on documents that
-    # small (~300k at the 7-day TTL) well under the 100 MB per-stage limit.
+    # explain(): the first window reads the (mmsi, ts) index already in order; MongoDB re-sorts
+    # in memory before each later window.
+    # Known limit: that sort grows with the history (~300k positions at the 7-day TTL) and is
+    # capped at 32 MB on Atlas M0; the $project below keeps it small, but not bounded. Evolution:
+    # run the pipeline per batch of vessels, or measure_stays in Python on (mmsi, ts, state).
     gap_ms = max_gap_minutes * 60_000  # date minus date is in milliseconds
     by_vessel = {"partitionBy": "$mmsi", "sortBy": {"ts": 1}}
     shift = lambda field, by: {"$shift": {"output": field, "by": by}}
@@ -76,6 +78,9 @@ def stays_pipeline(max_gap_minutes):
             "state": {"$cond": [{"$and": [{"$ne": ["$prev_state", None]}, {"$eq": ["$prev_state", "$next_state"]}]},
                                 "$prev_state", "$state"]},
             "gap": {"$subtract": ["$ts", "$prev_ts"]}}},
+        # The next windows re-sort in memory, and Atlas M0 caps that sort at 32 MB and ignores
+        # allowDiskUse: whole documents (location, sog...) broke it at 45k positions (2026-10-09).
+        {"$project": {"_id": 0, "mmsi": 1, "ts": 1, "state": 1, "gap": 1}},
         # 3. Number the runs of equal state: a running sum of "state changed here".
         {"$setWindowFields": {**by_vessel, "output": {"prev_smoothed": shift("$state", -1)}}},
         {"$set": {"new_run": {"$cond": [{"$eq": ["$state", "$prev_smoothed"]}, 0, 1]}}},
