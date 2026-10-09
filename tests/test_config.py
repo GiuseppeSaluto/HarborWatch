@@ -124,3 +124,18 @@ def test_track_hours_is_3():
 def test_track_min_move_is_500_m():
     # Spec section 8 point 5: only vessels that moved at least 500 m are drawn.
     assert config.TRACK_MIN_MOVE_M == 500
+
+
+def test_live_minutes_is_2():
+    # Spec section 8 point 6 / section 13: data counts as live up to 2 minutes.
+    assert config.LIVE_MINUTES == 2
+
+
+def test_live_minutes_covers_ais_delay_plus_flush():
+    # Spec section 13: LIVE_MINUTES = AIS delay plus FLUSH_SECONDS, with margin.
+    # Measured AIS delay, 90th percentile: 10.7 s (spec section 3).
+    assert config.LIVE_MINUTES * 60 > 10.7 + config.FLUSH_SECONDS
+
+
+def test_probe_seconds_is_20():
+    assert config.PROBE_SECONDS == 20

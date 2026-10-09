@@ -1,5 +1,6 @@
 """Streamlit dashboard: vessels by state on a map, and waiting time at anchor."""
 
+import asyncio
 import math
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -9,9 +10,11 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 
 import config
 from classify import COMMERCIAL, ship_category
+from diagnostics import diagnose, probe_stream
 from history import continuous_hours, hourly_series, longest_run, vessel_tracks
 from optimize import plan_berths, prepare, service_minutes, stays_pipeline, trusted_stay, usable_stays
 
@@ -46,7 +49,8 @@ def colors():
 def get_db():
     """One MongoClient for the whole app, shared across reruns and sessions."""
     # tz_aware: dates come back as UTC-aware datetimes instead of naive ones.
-    return MongoClient(config.MONGODB_URI, tz_aware=True)[config.DB_NAME]
+    # 10 s instead of the default 30 s: when Atlas is unreachable, say so sooner.
+    return MongoClient(config.MONGODB_URI, tz_aware=True, serverSelectionTimeoutMS=10_000)[config.DB_NAME]
 
 
 def load_states(db, now):
@@ -79,8 +83,12 @@ st.title("HarborWatch: Port of Genoa")
 @st.fragment(run_every="60s")  # reruns only this function, so the page doesn't flicker
 def dashboard():
     now = pd.Timestamp(datetime.now(UTC))
-    data_status(now)  # before the empty check: it matters most when the ingestion is down
-    df = load_states(get_db(), now)
+    try:
+        data_status(now)  # before the empty check: it matters most when the ingestion is down
+        df = load_states(get_db(), now)
+    except PyMongoError:
+        st.error("Cannot reach MongoDB Atlas: see Diagnostics in the sidebar.", icon=":material/cloud_off:")
+        return
     if df.empty:
         st.warning(f"No vessel heard from in the last {config.STALE_MINUTES} minutes: is ingest.py running?")
         return
@@ -106,7 +114,10 @@ def dashboard():
                  "help": "Trend: commercial vessels at anchor per hour, last 24 hours with data"} \
             if state == "anchored" and len(trend) > 1 else {}
         # height="stretch": cards without a sparkline grow to the row's height, so the row stays even.
-        col.metric(LABELS[state], int(counts.get(state, 0)), border=True, icon=ICONS[state], height="stretch", **spark)
+        # The keyed container lets state_card_css() paint the card in its state's map color.
+        with col.container(key=f"state-{state}", height="stretch"):
+            st.metric(LABELS[state], int(counts.get(state, 0)), border=True, icon=ICONS[state], height="stretch", **spark)
+    st.markdown(state_card_css(), unsafe_allow_html=True)
     cols[3].metric("Mean wait at anchor", fmt(anchored["wait"].mean()) if len(anchored) else "-",
                    border=True, icon=":material/hourglass_top:", height="stretch")
     cols[4].metric("Max wait at anchor", fmt(anchored["wait"].max()) if len(anchored) else "-",
@@ -229,7 +240,7 @@ def data_status(now):
     age = now - pd.Timestamp(last["ts"]) if last else None
     if age is None or age > timedelta(minutes=config.STALE_MINUTES):
         status, icon, color = "stopped", ":material/block:", "red"
-    elif age > timedelta(minutes=2):  # AIS delay (~10 s) + FLUSH_SECONDS, with margin
+    elif age > timedelta(minutes=config.LIVE_MINUTES):
         status, icon, color = "delayed", ":material/warning:", "orange"
     else:
         status, icon, color = "live", ":material/check_circle:", "green"
@@ -261,6 +272,56 @@ def data_status(now):
                             "otherwise it uses the default.")
         cols[3].metric("Atlas storage", f"{used_mb:.1f} MB", help=f"of {config.STORAGE_LIMIT_MB} MB "
                        f"({100 * used_mb / config.STORAGE_LIMIT_MB:.1f}%); the TTL keeps it near ~70 MB")
+
+
+# Badge per diagnosis: (label, icon, color). Status colors as in the data badge: green when fine,
+# orange for external causes we can only wait out, red for links we can fix, gray when unknown.
+DIAGNOSIS_BADGES = {
+    "live": ("Live", ":material/check_circle:", "green"),
+    "unknown": ("Not checked", ":material/help:", "gray"),
+    "coverage": ("No coverage", ":material/signal_cellular_off:", "orange"),
+    "aisstream": ("AISStream silent", ":material/wifi_off:", "orange"),
+    "ingestion": ("Ingestion stopped", ":material/sync_problem:", "red"),
+    "access": ("AISStream refused", ":material/key_off:", "red"),
+    "atlas": ("Atlas unreachable", ":material/cloud_off:", "red"),
+}
+
+
+@st.fragment(run_every="60s")
+def diagnostics_panel():
+    """Which link is broken when data stop: Atlas, the ingestion or AISStream (spec section 8, point 6)."""
+    st.subheader("Diagnostics")
+    try:
+        last = get_db().positions.find_one(sort=[("ts", -1)], projection={"ts": 1})
+        atlas_ok, age = True, datetime.now(UTC) - last["ts"] if last else None
+    except PyMongoError:
+        atlas_ok, age = False, None
+    # The stream check opens a connection of its own, so it runs only on request, never on the
+    # minute refresh: AISStream allows 3 connections per key, and the ingestion uses one.
+    if st.button("Check the stream", icon=":material/network_check:",
+                 help=f"Listens to AISStream for {config.PROBE_SECONDS} s and counts positions in the port and worldwide"):
+        with st.spinner(f"Listening for {config.PROBE_SECONDS} s..."):
+            st.session_state.probe = (datetime.now(UTC), asyncio.run(probe_stream(config.PROBE_SECONDS)))
+    probed_at, probe = st.session_state.get("probe", (None, None))
+    code, message = diagnose(atlas_ok, age, probe)
+    label, icon, color = DIAGNOSIS_BADGES[code]
+    st.badge(label, icon=icon, color=color)
+    st.write(message)
+    if probe:
+        st.caption(f"Stream check at {local(probed_at):%H:%M}: {probe['port']} positions in the port, "
+                   f"{probe['world']} worldwide in {probe['seconds']} s"
+                   + ("" if probe["confirmed"] else ", subscription not confirmed"))
+
+
+def state_card_css():
+    """Tie each state card to the map: accent line, icon and sparkline in the state's dot color."""
+    c = colors()
+    return "<style>" + "".join(
+        f".st-key-state-{s} [data-testid=stMetric] {{box-shadow: inset 0 3px 0 {c[s]};}}"
+        f".st-key-state-{s} [data-testid=stMetricIcon] {{color: {c[s]};}}"
+        f".st-key-state-{s} [data-testid=stMetricChart] path[aria-roledescription='area mark'] {{fill: {c[s]}; fill-opacity: 0.25;}}"
+        f".st-key-state-{s} [data-testid=stMetricChart] path[aria-roledescription='line mark'] {{stroke: {c[s]};}}"
+        for s in LABELS) + "</style>"
 
 
 def legend():
@@ -398,4 +459,6 @@ def gantt(plan, berths, now, names):
     ).properties(height=30 * len(berths))
 
 
+with st.sidebar:
+    diagnostics_panel()
 dashboard()

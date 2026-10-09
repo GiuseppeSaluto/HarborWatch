@@ -39,6 +39,13 @@ TIMEZONE = "Europe/Rome"
 # or AIS switched off). Moored and anchored vessels transmit every few minutes.
 STALE_MINUTES = 30
 
+# Data count as live while the last position is at most this old: AIS delay (~10 s) plus
+# FLUSH_SECONDS, with margin.
+LIVE_MINUTES = 2
+
+# Diagnostics: how long the on-demand AISStream probe listens.
+PROBE_SECONDS = 20
+
 # Map tracks: how far back to draw, and how far a vessel must have moved from its first
 # position in that window to get one (GPS jitter at berth or an anchor swing stays below).
 TRACK_HOURS = 3
