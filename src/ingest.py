@@ -13,7 +13,8 @@ from pymongo import ASCENDING, GEOSPHERE, AsyncMongoClient, UpdateOne
 from pymongo.errors import PyMongoError
 
 import config
-from classify import classify, coast_distance_m
+from classify import COMMERCIAL, classify, coast_distance_m, ship_category
+from history import archive_since, congestion_pipeline, stays_pipeline, vessel_groups
 
 AISSTREAM_URL = "wss://stream.aisstream.io/v0/stream"
 
@@ -148,6 +149,8 @@ async def ensure_indexes(db):
     await db.positions.create_index("ts", expireAfterSeconds=ttl)
     await db.vessels.create_index("mmsi", unique=True)
     await db.states.create_index("mmsi", unique=True)
+    # $merge into stays matches on (mmsi, start), which needs a unique index on those fields.
+    await db.stays.create_index([("mmsi", ASCENDING), ("start", ASCENDING)], unique=True)
 
 
 async def log_storage(db):
@@ -165,6 +168,26 @@ async def log_storage(db):
     log.log(level, "storage %.1f MB of %d (%.0f%%), projected %.1f MB at %d days TTL; %d positions, %d in the last 24 h",
             used / 2**20, config.STORAGE_LIMIT_MB, 100 * used / limit,
             projected / 2**20, config.POSITIONS_TTL_DAYS, total, last_day)
+
+
+async def archive(db, now):
+    """Copy complete stays and hourly congestion to their permanent collections.
+
+    The positions they are computed from expire after POSITIONS_TTL_DAYS; the copies stay.
+    """
+    counts = await (await db.positions.aggregate([
+        {"$match": {"state": {"$exists": True}}}, {"$group": {"_id": "$mmsi", "n": {"$sum": 1}}}])).to_list()
+    # A stay found again is the same stay: keep the archived copy.
+    into_stays = {"$merge": {"into": "stays", "on": ["mmsi", "start"],
+                             "whenMatched": "keepExisting", "whenNotMatched": "insert"}}
+    for group in vessel_groups(counts, config.STAY_BATCH_POSITIONS):
+        await (await db.positions.aggregate([{"$match": {"mmsi": {"$in": group}}},
+                                             *stays_pipeline(config.STALE_MINUTES), into_stays])).to_list()
+    commercial = [v["mmsi"] async for v in db.vessels.find({}, {"mmsi": 1, "ship_type": 1})
+                  if ship_category(v.get("ship_type")) in COMMERCIAL]
+    # Only whole hours still in the TTL window: the current one is rewritten until it ends.
+    await (await db.positions.aggregate([*congestion_pipeline(archive_since(now), commercial),
+                                         {"$merge": {"into": "congestion_hourly", "whenMatched": "replace"}}])).to_list()
 
 
 async def safe_flush(db, positions, vessels, states):
@@ -187,7 +210,7 @@ async def main():
     # Outside the reconnect loop: buffers and sampling survive a dropped connection.
     positions, vessels, states, last_saved = [], {}, [], {}
     last_flush = time.monotonic()
-    last_stats = -math.inf  # log storage at the first flush
+    last_stats = last_archive = -math.inf  # log storage and archive at the first flush
     try:
         # Iterating over connect() reconnects automatically on network errors.
         async for ws in websockets.connect(AISSTREAM_URL):
@@ -233,6 +256,12 @@ async def main():
                             except PyMongoError as exc:
                                 log.warning("storage check failed: %s", exc)
                             last_stats = last_flush
+                        if last_flush - last_archive >= config.ARCHIVE_MINUTES * 60:
+                            try:
+                                await archive(db, datetime.now(UTC))
+                            except PyMongoError as exc:
+                                log.warning("archive failed, retrying in %d min: %s", config.ARCHIVE_MINUTES, exc)
+                            last_archive = last_flush
             except websockets.ConnectionClosed as exc:
                 log.warning("connection closed (%s), reconnecting in %d s", exc, RECONNECT_DELAY_S)
             # Also reached when the server closes cleanly and the inner loop just ends.

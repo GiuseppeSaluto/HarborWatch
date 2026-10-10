@@ -401,3 +401,154 @@ def test_tracks_gap_of_one_vessel_does_not_split_another():
     result = tracks(v1 + v2)
     assert len(result[1]) == 2
     assert len(result[2]) == 1
+
+
+# --- archive helpers (spec section 8 point 7, section 13 "history (archivio)") -----------
+
+import random  # noqa: E402
+
+import optimize  # noqa: E402
+
+
+def test_stays_pipeline_is_shared_with_optimize():
+    # Spec: stays_pipeline moved to history; optimize.stays_pipeline stays the same object.
+    assert optimize.stays_pipeline is history.stays_pipeline
+
+
+# vessel_groups(counts, cap): counts is a list of {"_id": mmsi, "n": positions}.
+
+def counts(*ns, first_mmsi=1):
+    return [{"_id": first_mmsi + i, "n": n} for i, n in enumerate(ns)]
+
+
+def groups(cs, cap):
+    return [list(g) for g in history.vessel_groups(cs, cap)]
+
+
+def test_vessel_groups_empty():
+    assert groups([], 100) == []
+
+
+def test_vessel_groups_everything_fits_in_one_group():
+    assert groups(counts(10, 20, 30), 100) == [[1, 2, 3]]
+
+
+def test_vessel_groups_sum_equal_to_cap_stays_in_group():
+    assert groups(counts(40, 60), 100) == [[1, 2]]
+
+
+def test_vessel_groups_vessel_that_would_exceed_opens_new_group():
+    assert groups(counts(40, 61), 100) == [[1], [2]]
+
+
+def test_vessel_groups_keep_given_order_without_backfilling():
+    # Greedy in the given order: 30 would fit next to 60, but the group of 60 is
+    # already closed when 50 opened a new one.
+    assert groups(counts(60, 50, 40, 30), 100) == [[1], [2, 3], [4]]
+
+
+def test_vessel_groups_do_not_sort_by_size():
+    assert groups(counts(10, 95, 10), 100) == [[1], [2], [3]]
+
+
+def test_vessel_groups_vessel_over_cap_is_alone_in_the_middle():
+    assert groups(counts(10, 500, 10), 100) == [[1], [2], [3]]
+
+
+def test_vessel_groups_vessel_over_cap_first():
+    assert groups(counts(500, 10, 20), 100) == [[1], [2, 3]]
+
+
+def test_vessel_groups_vessel_over_cap_last():
+    assert groups(counts(10, 20, 500), 100) == [[1, 2], [3]]
+
+
+def test_vessel_groups_single_vessel_exactly_cap():
+    assert groups(counts(100, 1), 100) == [[1], [2]]
+
+
+def test_vessel_groups_return_the_mmsi_values_given():
+    cs = [{"_id": 247000111, "n": 5}, {"_id": 538000222, "n": 7}]
+    assert groups(cs, 100) == [[247000111, 538000222]]
+
+
+def test_vessel_groups_unsorted_mmsi_keep_input_order():
+    cs = [{"_id": 9, "n": 30}, {"_id": 3, "n": 30}, {"_id": 7, "n": 50}]
+    assert groups(cs, 100) == [[9, 3], [7]]
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_vessel_groups_invariants_on_random_input(seed):
+    rng = random.Random(seed)
+    cap = 1000
+    cs = [{"_id": 100 + i, "n": rng.choice([1, 50, 300, 999, 1000, 1001, 2500])}
+          for i in range(60)]
+    n_of = {c["_id"]: c["n"] for c in cs}
+    result = groups(cs, cap)
+    # Nothing lost, nothing repeated, order kept.
+    assert [m for g in result for m in g] == [c["_id"] for c in cs]
+    for g in result:
+        assert g, "no empty groups"
+        total = sum(n_of[m] for m in g)
+        assert total <= cap or len(g) == 1, "over cap only for a single vessel"
+    # Greedy: the first vessel of each group would have overflowed the previous one.
+    for prev, nxt in zip(result, result[1:]):
+        assert sum(n_of[m] for m in prev) + n_of[nxt[0]] > cap
+
+
+# archive_since(now): now - POSITIONS_TTL_DAYS rounded up to the next whole hour,
+# unchanged when it falls exactly on an hour.
+
+def ttl():
+    return timedelta(days=config.POSITIONS_TTL_DAYS)
+
+
+def test_archive_since_rounds_up_to_next_hour():
+    now = datetime(2026, 10, 10, 12, 34, 56, tzinfo=timezone.utc)
+    expected = datetime(2026, 10, 10, 13, 0, tzinfo=timezone.utc) - ttl()
+    assert history.archive_since(now) == expected
+
+
+def test_archive_since_exact_hour_is_unchanged():
+    now = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
+    assert history.archive_since(now) == now - ttl()
+
+
+def test_archive_since_one_microsecond_past_the_hour_rounds_up():
+    now = datetime(2026, 10, 10, 12, 0, 0, 1, tzinfo=timezone.utc)
+    expected = datetime(2026, 10, 10, 13, 0, tzinfo=timezone.utc) - ttl()
+    assert history.archive_since(now) == expected
+
+
+def test_archive_since_one_second_before_the_hour():
+    now = datetime(2026, 10, 10, 12, 59, 59, tzinfo=timezone.utc)
+    expected = datetime(2026, 10, 10, 13, 0, tzinfo=timezone.utc) - ttl()
+    assert history.archive_since(now) == expected
+
+
+def test_archive_since_crosses_day_and_month_boundary():
+    now = datetime(2026, 11, 7, 23, 30, tzinfo=timezone.utc)
+    expected = datetime(2026, 11, 8, 0, 0, tzinfo=timezone.utc) - ttl()
+    assert history.archive_since(now) == expected
+
+
+def test_archive_since_with_seven_day_ttl():
+    # Spec fixes POSITIONS_TTL_DAYS = 7.
+    now = datetime(2026, 10, 10, 8, 15, tzinfo=timezone.utc)
+    assert history.archive_since(now) == datetime(2026, 10, 3, 9, 0, tzinfo=timezone.utc)
+
+
+def test_archive_since_is_utc_aware():
+    result = history.archive_since(datetime(2026, 10, 10, 8, 15, tzinfo=timezone.utc))
+    assert result.tzinfo is not None
+    assert result.utcoffset() == timedelta(0)
+
+
+@pytest.mark.parametrize("minute,second,micro", [
+    (0, 0, 0), (0, 0, 1), (1, 0, 0), (29, 59, 999999), (30, 0, 0), (59, 59, 999999)])
+def test_archive_since_is_first_whole_hour_inside_ttl_window(minute, second, micro):
+    now = datetime(2026, 10, 10, 6, minute, second, micro, tzinfo=timezone.utc)
+    result = history.archive_since(now)
+    window_start = now - ttl()
+    assert (result.minute, result.second, result.microsecond) == (0, 0, 0)
+    assert window_start <= result < window_start + timedelta(hours=1)

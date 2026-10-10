@@ -144,3 +144,13 @@ def test_probe_seconds_is_20():
 def test_min_stay_vessel_is_100_m():
     # Spec sections 9 and 13: only vessels of at least 100 m count for stay durations.
     assert config.MIN_STAY_VESSEL_M == 100
+
+
+def test_archive_minutes_is_10():
+    # Spec section 8 point 7 / section 13: archiving runs every 10 minutes.
+    assert config.ARCHIVE_MINUTES == 10
+
+
+def test_positions_ttl_days_is_7():
+    # Spec section 8 point 7: positions expire after POSITIONS_TTL_DAYS (7) days.
+    assert config.POSITIONS_TTL_DAYS == 7

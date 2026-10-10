@@ -79,3 +79,6 @@ MIN_STAY_MINUTES = 60
 # The stays pipeline sorts in memory, capped at 32 MB on Atlas M0 (it failed at ~72k positions
 # on 2026-10-10): run it on groups of vessels holding at most this many positions each.
 STAY_BATCH_POSITIONS = 20_000
+# Stays and hourly congestion are copied to permanent collections this often (the positions
+# they come from expire after POSITIONS_TTL_DAYS).
+ARCHIVE_MINUTES = 10

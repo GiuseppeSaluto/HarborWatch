@@ -2,7 +2,6 @@
 
 import asyncio
 import math
-from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 import altair as alt
@@ -16,7 +15,7 @@ import config
 from classify import COMMERCIAL, ship_category
 from diagnostics import diagnose, probe_stream
 from history import continuous_hours, hourly_series, longest_run, vessel_tracks
-from optimize import plan_berths, prepare, service_minutes, stays_pipeline, trusted_stay, usable_stays
+from optimize import plan_berths, prepare, service_minutes, trusted_stay, usable_stays
 
 LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
 ICONS = {"at_berth": ":material/directions_boat:", "anchored": ":material/anchor:", "underway": ":material/sailing:"}
@@ -176,21 +175,14 @@ def dashboard():
 
 
 @st.cache_data(ttl=600)
-def congestion_history():
-    """Commercial vessels at anchor per hour; hours without any data stay empty, not zero."""
-    db = get_db()
-    since = datetime.now(UTC) - timedelta(days=config.POSITIONS_TTL_DAYS)
-    hour = {"$dateTrunc": {"date": "$ts", "unit": "hour"}}
-    covered = {pd.Timestamp(d["_id"]).tz_convert("UTC") for d in db.positions.aggregate([
-        {"$match": {"state": {"$exists": True}, "ts": {"$gte": since}}}, {"$group": {"_id": hour}}])}
-    if not covered:
+def congestion_history(days=config.POSITIONS_TTL_DAYS):
+    """Commercial vessels at anchor per hour from the archive; hours without data stay empty, not zero."""
+    query = {} if days is None else {"_id": {"$gte": datetime.now(UTC) - timedelta(days=days)}}
+    hours = list(get_db().congestion_hourly.find(query, {"anchored": 1}))
+    if not hours:
         return pd.DataFrame()  # hourly_series would give no rows, and a DataFrame of none has no columns
-    commercial = {v["mmsi"] for v in db.vessels.find({}, {"mmsi": 1, "ship_type": 1})
-                  if ship_category(v.get("ship_type")) in COMMERCIAL}
-    counts = Counter(pd.Timestamp(d["_id"]["hour"]).tz_convert("UTC") for d in db.positions.aggregate([
-        {"$match": {"state": "anchored", "ts": {"$gte": since}}},
-        {"$group": {"_id": {"hour": hour, "mmsi": "$mmsi"}}}]) if d["_id"]["mmsi"] in commercial)
-    history = pd.DataFrame(hourly_series(covered, counts))
+    counts = {pd.Timestamp(h["_id"]).tz_convert("UTC"): h["anchored"] for h in hours}
+    history = pd.DataFrame(hourly_series(set(counts), counts))
     history["label"] = history["hour"].map(lambda h: f"{local(h):%a %H:%M}")
     history["hour"] = history["hour"].map(chart_time)
     return history
@@ -198,37 +190,17 @@ def congestion_history():
 
 @st.cache_data(ttl=3600)  # a week of positions: recompute hourly, not every minute
 def stay_estimates():
-    """Expected stay per category, measured from the position history where possible."""
+    """Expected stay per category, measured from the archived stays where possible."""
     db = get_db()
     vessels = {v["mmsi"]: v for v in db.vessels.find({}, {"mmsi": 1, "ship_type": 1, "length": 1})}
-    # The stays are found inside MongoDB: only they travel, not the whole position history.
-    # A stay belongs to one vessel, so running the pipeline per group of vessels finds the same stays.
     stays = [{"category": ship_category(vessels.get(d["mmsi"], {}).get("ship_type")),
               "length": vessels.get(d["mmsi"], {}).get("length"),
               "minutes": (d["end"] - d["start"]).total_seconds() / 60}
-             for group in vessel_groups(db)
-             for d in db.positions.aggregate([{"$match": {"mmsi": {"$in": group}}}, *stays_pipeline(config.STALE_MINUTES)])]
-    history = congestion_history()
+             for d in db.stays.find({}, {"mmsi": 1, "start": 1, "end": 1})]
+    history = congestion_history(days=None)  # the continuous window can be older than the chart
     window = 60 * longest_run(history["anchored"].tolist() if not history.empty else [])
     counts = {c: sum(1 for s in usable_stays(stays) if s["category"] == c) for c in config.SERVICE_MINUTES}
     return service_minutes(stays, window), counts, window
-
-
-
-def vessel_groups(db):
-    """Vessels in groups of at most STAY_BATCH_POSITIONS positions, for the stays pipeline."""
-    # Known limit: one vessel is never split, so a single history above the cap (over 2 weeks at
-    # one position a minute, beyond the 7-day TTL) would hit the M0 sort limit again.
-    group, size = [], 0
-    for v in db.positions.aggregate([{"$match": {"state": {"$exists": True}}},
-                                     {"$group": {"_id": "$mmsi", "n": {"$sum": 1}}}]):
-        if group and size + v["n"] > config.STAY_BATCH_POSITIONS:
-            yield group
-            group, size = [], 0
-        group.append(v["_id"])
-        size += v["n"]
-    if group:
-        yield group
 
 
 def berth_plan(df, now):
