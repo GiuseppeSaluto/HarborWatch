@@ -75,3 +75,6 @@ STAY_WINDOW_FACTOR = 2
 # dock for minutes and dragged the passenger median down to 8 minutes on 2026-10-04.
 MIN_STAY_VESSEL_M = 50
 MIN_STAY_MINUTES = 60
+# The stays pipeline sorts in memory, capped at 32 MB on Atlas M0 (it failed at ~72k positions
+# on 2026-10-10): run it on groups of vessels holding at most this many positions each.
+STAY_BATCH_POSITIONS = 20_000

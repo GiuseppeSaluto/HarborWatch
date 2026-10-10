@@ -62,9 +62,8 @@ def stays_pipeline(max_gap_minutes):
     """
     # explain(): the first window reads the (mmsi, ts) index already in order; MongoDB re-sorts
     # in memory before each later window.
-    # Known limit: that sort grows with the history (~300k positions at the 7-day TTL) and is
-    # capped at 32 MB on Atlas M0; the $project below keeps it small, but not bounded. Evolution:
-    # run the pipeline per batch of vessels, or measure_stays in Python on (mmsi, ts, state).
+    # That sort grows with the history and is capped at 32 MB on Atlas M0: the $project below
+    # keeps it small, and the dashboard runs the pipeline per group of vessels to bound it.
     gap_ms = max_gap_minutes * 60_000  # date minus date is in milliseconds
     by_vessel = {"partitionBy": "$mmsi", "sortBy": {"ts": 1}}
     shift = lambda field, by: {"$shift": {"output": field, "by": by}}

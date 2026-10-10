@@ -202,14 +202,33 @@ def stay_estimates():
     db = get_db()
     vessels = {v["mmsi"]: v for v in db.vessels.find({}, {"mmsi": 1, "ship_type": 1, "length": 1})}
     # The stays are found inside MongoDB: only they travel, not the whole position history.
+    # A stay belongs to one vessel, so running the pipeline per group of vessels finds the same stays.
     stays = [{"category": ship_category(vessels.get(d["mmsi"], {}).get("ship_type")),
               "length": vessels.get(d["mmsi"], {}).get("length"),
               "minutes": (d["end"] - d["start"]).total_seconds() / 60}
-             for d in db.positions.aggregate(stays_pipeline(config.STALE_MINUTES))]
+             for group in vessel_groups(db)
+             for d in db.positions.aggregate([{"$match": {"mmsi": {"$in": group}}}, *stays_pipeline(config.STALE_MINUTES)])]
     history = congestion_history()
     window = 60 * longest_run(history["anchored"].tolist() if not history.empty else [])
     counts = {c: sum(1 for s in usable_stays(stays) if s["category"] == c) for c in config.SERVICE_MINUTES}
     return service_minutes(stays, window), counts, window
+
+
+
+def vessel_groups(db):
+    """Vessels in groups of at most STAY_BATCH_POSITIONS positions, for the stays pipeline."""
+    # Known limit: one vessel is never split, so a single history above the cap (over 2 weeks at
+    # one position a minute, beyond the 7-day TTL) would hit the M0 sort limit again.
+    group, size = [], 0
+    for v in db.positions.aggregate([{"$match": {"state": {"$exists": True}}},
+                                     {"$group": {"_id": "$mmsi", "n": {"$sum": 1}}}]):
+        if group and size + v["n"] > config.STAY_BATCH_POSITIONS:
+            yield group
+            group, size = [], 0
+        group.append(v["_id"])
+        size += v["n"]
+    if group:
+        yield group
 
 
 def berth_plan(df, now):

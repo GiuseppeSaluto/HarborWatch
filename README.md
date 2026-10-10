@@ -50,7 +50,7 @@ cp .env.example .env           # then fill in AISSTREAM_API_KEY and MONGODB_URI
 ./run.sh
 ```
 
-`run.sh` starts the ingestion in the background and the dashboard at http://localhost:8501; Ctrl+C stops both. Some public networks block outbound port 27017, which makes Atlas unreachable.
+`run.sh` asks what to start: `0` the ingestion in the background plus the dashboard at http://localhost:8501, or `1` (the default) the dashboard alone, when the ingestion runs on another machine. Ctrl+C stops everything. Some public networks block outbound port 27017, which makes Atlas unreachable.
 
 ## Tests
 
@@ -73,7 +73,7 @@ The suite runs in under a second, without network or database, on every push (Gi
 src/        ingest.py, classify.py, optimize.py, history.py, app.py, config.py
 data/       coastline.json (OSM coastline), berths.json (berths of the port)
 tests/      one test file per module with non-trivial logic, plus recorded AIS messages
-run.sh      ingestion + dashboard in one command
+run.sh      ingestion + dashboard, or the dashboard alone
 ```
 
 ## Data
