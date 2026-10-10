@@ -72,8 +72,9 @@ MIN_STAYS = 5
 # so their median would drag a 24 h cargo call down to about an hour.
 STAY_WINDOW_FACTOR = 2
 # Only stays of ships the plan is about count: harbour boats (16-30 m "passenger" craft)
-# dock for minutes and dragged the passenger median down to 8 minutes on 2026-10-04.
-MIN_STAY_VESSEL_M = 50
+# dragged the passenger median down to 8 minutes on 2026-10-04, and 50-85 m service craft
+# with a cargo or tanker AIS type (bunker barges) made every cargo stay ~1.6 h on 2026-10-10.
+MIN_STAY_VESSEL_M = 100
 MIN_STAY_MINUTES = 60
 # The stays pipeline sorts in memory, capped at 32 MB on Atlas M0 (it failed at ~72k positions
 # on 2026-10-10): run it on groups of vessels holding at most this many positions each.

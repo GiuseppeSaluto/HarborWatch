@@ -155,7 +155,8 @@ def test_one_vessel_gap_does_not_affect_another():
 # Interface (spec section 13): optimize.service_minutes(stays, window_minutes)
 # takes stay dicts {"category", "length" (metres), "minutes"} plus the length of
 # the continuous collection window in minutes, and returns a dict
-# category -> minutes. The >= 50 m and >= 60 min filters are applied here.
+# category -> minutes. The >= MIN_STAY_VESSEL_M (100 m) and >= 60 min filters
+# are applied here.
 
 DEFAULTS = config.SERVICE_MINUTES
 BIG_WINDOW = 10 * max(DEFAULTS.values())
@@ -209,19 +210,66 @@ def test_other_category_stays_do_not_count():
 
 
 def test_small_vessels_are_excluded():
-    # Harbour boats under 50 m dragged the passenger median to 8 minutes.
+    # Harbour boats of 16-30 m dragged the passenger median to 8 minutes.
     data = stays("passenger", [480, 500, 520], length=150) + \
         stays("passenger", [70, 70, 70, 70], length=30)
     assert service(data)["passenger"] == DEFAULTS["passenger"]
 
 
-def test_vessel_of_exactly_50_m_counts():
-    data = stays("passenger", [100, 200, 300, 400, 500], length=50)
+def test_service_boats_with_cargo_type_are_excluded():
+    # Spec section 9: bunker barges and supply boats of 50-85 m with AIS type
+    # cargo or tanker made every measured cargo/tanker stay; they must not count.
+    lengths = [55, 68, 68, 85, 85]
+    data = [{"category": "cargo", "length": n, "minutes": 100} for n in lengths]
+    data += [{"category": "tanker", "length": n, "minutes": 100} for n in lengths]
+    result = service(data)
+    assert result["cargo"] == DEFAULTS["cargo"]
+    assert result["tanker"] == DEFAULTS["tanker"]
+
+
+def test_service_boats_do_not_shift_median_of_large_ships():
+    data = stays("cargo", [600, 700, 800, 900, 1000], length=200) + \
+        [{"category": "cargo", "length": 68, "minutes": 90} for _ in range(6)]
+    assert service(data)["cargo"] == 800
+
+
+def test_vessel_of_exactly_100_m_counts():
+    data = stays("passenger", [100, 200, 300, 400, 500], length=100)
     assert service(data)["passenger"] == 300
 
 
-def test_vessel_just_under_50_m_does_not_count():
-    data = stays("passenger", [100, 200, 300, 400, 500], length=49)
+def test_vessel_of_99_m_does_not_count():
+    data = stays("passenger", [100, 200, 300, 400, 500], length=99)
+    assert service(data)["passenger"] == DEFAULTS["passenger"]
+
+
+def test_vessel_of_old_50_m_threshold_no_longer_counts():
+    data = stays("cargo", [100, 200, 300, 400, 500], length=50)
+    assert service(data)["cargo"] == DEFAULTS["cargo"]
+
+
+def test_boundary_follows_config_value():
+    at = stays("tanker", [100, 200, 300, 400, 500], length=config.MIN_STAY_VESSEL_M)
+    below = stays("tanker", [100, 200, 300, 400, 500], length=config.MIN_STAY_VESSEL_M - 1)
+    assert service(at)["tanker"] == 300
+    assert service(below)["tanker"] == DEFAULTS["tanker"]
+
+
+def test_unknown_length_does_not_count():
+    data = stays("passenger", [100, 200, 300, 400, 500], length=None)
+    assert service(data)["passenger"] == DEFAULTS["passenger"]
+
+
+def test_unknown_length_does_not_shift_median():
+    data = stays("passenger", [100, 200, 300, 400, 500], length=150) + \
+        stays("passenger", [5000, 5000, 5000, 5000], length=None)
+    assert service(data)["passenger"] == 300
+
+
+def test_missing_length_key_does_not_count():
+    # Assumption: a stay dict without a "length" key is an unknown length too
+    # (spec section 9: "a vessel of unknown length does not count").
+    data = [{"category": "passenger", "minutes": d} for d in [100, 200, 300, 400, 500]]
     assert service(data)["passenger"] == DEFAULTS["passenger"]
 
 

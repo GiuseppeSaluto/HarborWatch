@@ -117,12 +117,12 @@ def trusted_stay(count, default_minutes, window_minutes, min_stays):
 def usable_stays(stays):
     """The stays that say something about berth calls.
 
-    stays: dicts with category, length (m, or None) and minutes. Harbour boats under
-    MIN_STAY_VESSEL_M and stays under MIN_STAY_MINUTES are left out: on 2026-10-04 they
-    dragged the passenger median down to 8 minutes.
+    stays: dicts with category, length (m; None or missing = unknown) and minutes. Vessels under
+    MIN_STAY_VESSEL_M or of unknown length, and stays under MIN_STAY_MINUTES, are left out:
+    harbour and service craft would drag the medians down to minutes or an hour.
     """
     return [s for s in stays
-            if (s["length"] or 0) >= config.MIN_STAY_VESSEL_M and s["minutes"] >= config.MIN_STAY_MINUTES]
+            if (s.get("length") or 0) >= config.MIN_STAY_VESSEL_M and s["minutes"] >= config.MIN_STAY_MINUTES]
 
 
 def service_minutes(stays, window_minutes=None, defaults=None, min_stays=None):

@@ -139,3 +139,8 @@ def test_live_minutes_covers_ais_delay_plus_flush():
 
 def test_probe_seconds_is_20():
     assert config.PROBE_SECONDS == 20
+
+
+def test_min_stay_vessel_is_100_m():
+    # Spec sections 9 and 13: only vessels of at least 100 m count for stay durations.
+    assert config.MIN_STAY_VESSEL_M == 100
