@@ -81,3 +81,7 @@ run.sh      ingestion + dashboard, or the dashboard alone
 - Vessel positions: [AISStream](https://aisstream.io) live AIS feed.
 - `data/coastline.json` is the OpenStreetMap coastline around the port, © OpenStreetMap contributors, available under the [ODbL](https://www.openstreetmap.org/copyright).
 - `data/berths.json` combines quay lengths published by the [Port Authority of Genoa](https://www.portsofgenoa.com) with values observed in the collected data, as noted in each entry.
+
+## License
+
+The code is released under the [MIT License](LICENSE). The data files keep their own terms: `data/coastline.json` is under the ODbL (see Data above).
