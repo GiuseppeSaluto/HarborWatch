@@ -8,7 +8,7 @@ Real-time port congestion monitor and berth allocation optimizer for the Port of
 
 ## What it does
 
-- **Monitors the port live.** Every vessel in the port area is classified as *at berth*, *at anchor* or *underway*, and the dashboard shows the counts, a map with the paths of the vessels that moved in the last 3 hours, and how long commercial vessels have been waiting at anchor.
+- **Monitors the port live.** Every vessel in the port area is classified as *at berth*, *at anchor* or *underway*, and the dashboard shows the counts, a map where each vessel's icon tells its type (container ship, tanker, ferry, tug, sailing boat) and its color the state, with the paths of the vessels that moved in the last 3 hours, and how long commercial vessels have been waiting at anchor.
 - **Tracks congestion over time.** An hourly series of commercial vessels at anchor, with gaps where no data was collected rather than misleading zeros.
 - **Proposes a berth plan.** A constraint-programming model (OR-Tools CP-SAT) assigns every waiting vessel a compatible berth and a mooring time, minimizing the total wait, around the vessels already moored.
 - **Says how far to trust itself.** A status badge and panel show data freshness, continuous collection time, which stay durations are measured and which are still defaults, and database usage. Vessels the plan cannot place are listed, not dropped.
@@ -58,7 +58,7 @@ cp .env.example .env           # then fill in AISSTREAM_API_KEY and MONGODB_URI
 pytest
 ```
 
-The suite runs in under a second, without network or database, on every push (GitHub Actions, Python 3.12 and 3.14). It covers message validation, classification thresholds and the coastline distance, the berth data, the optimizer (expected optima checked by brute force on small cases), berth occupancy, stay measurement and the hourly history behind the charts. The tests are written by a separate agent from the specification alone, without reading the implementation; the code adapts to them. `tests/check_stays_pipeline.py` checks against a real MongoDB that the aggregation finding the stays agrees with the tested Python definition.
+The suite runs in under a second, without network or database, on every push (GitHub Actions, Python 3.12 and 3.14). It covers message validation, classification thresholds and the coastline distance, the berth data, the optimizer (expected optima checked by brute force on small cases), berth occupancy, stay measurement, the hourly history behind the charts and the map icons. The tests are written by a separate agent from the specification alone, without reading the implementation; the code adapts to them. `tests/check_stays_pipeline.py` checks against a real MongoDB that the aggregation finding the stays agrees with the tested Python definition.
 
 ## Known limitations
 

@@ -14,6 +14,7 @@ from pymongo.errors import ConnectionFailure
 import config
 from classify import COMMERCIAL, ship_category
 from diagnostics import diagnose, probe_stream
+from icons import SVG, vessel_icon
 from history import continuous_hours, hourly_series, longest_run, vessel_tracks
 from optimize import plan_berths, prepare, service_minutes, trusted_stay, usable_stays
 
@@ -146,7 +147,7 @@ def dashboard():
                             help=f"Paths of the last {config.TRACK_HOURS} h, for vessels that moved at least "
                                  f"{config.TRACK_MIN_MOVE_M} m")
     st.pydeck_chart(port_map(df, recent_tracks() if show_tracks else ([], {})), height=520)
-    st.caption(legend() + f" · lines: paths of the last {config.TRACK_HOURS} h · rings: berth areas from "
+    st.caption(legend(df) + f" · lines: paths of the last {config.TRACK_HOURS} h · rings: berth areas from "
                "data/berths.json · hover for details", unsafe_allow_html=True)
 
     st.subheader("Commercial vessels at anchor, per hour")
@@ -335,10 +336,15 @@ def state_card_css():
         for s in LABELS) + "</style>"
 
 
-def legend():
-    """Map legend in the exact dot colors of the current theme (HTML, for st.caption)."""
+def legend(df):
+    """Map legend (HTML, for st.caption): the state colors of the current theme, then the shapes
+    of the categories on the map."""
     c = colors()
-    return " · ".join(f'<span style="color:{c[s]}">●</span> {LABELS[s].lower()}' for s in LABELS)
+    shape = lambda k: SVG[k].replace('width="48" height="48"', 'width="1.1em" height="1.1em" fill="currentColor" '
+                                     'style="vertical-align:-0.2em"')
+    present = {vessel_icon(t)["id"] for t in df["type"]}
+    return " · ".join([f'<span style="color:{c[s]}">●</span> {LABELS[s].lower()}' for s in LABELS]
+                      + [f"{shape(k)} {k}" for k in SVG if k in present])
 
 
 def fmt_age(delta):
@@ -365,12 +371,14 @@ def recent_tracks():
 
 
 def port_map(df, tracks_and_spans):
-    """Vessels colored by state, plus one ring per berth area; both explain themselves on hover."""
+    """Vessels shaped by category and colored by state, plus one ring per berth area; both explain
+    themselves on hover."""
     c = colors()
     known = lambda v, unit="": "?" if pd.isna(v) else f"{v:g}{unit}"
     vessels = pd.DataFrame({
         "position": df[["lon", "lat"]].values.tolist(),
         "color": df["state"].map(lambda s: rgb(c[s])),
+        "icon": df["type"].map(vessel_icon),
         # Plain-text title/line1/line2 on both layers: pydeck has one tooltip template for every
         # layer, and it escapes field values, so the markup lives in the template, not the data.
         "title": [r["name"] if isinstance(r["name"], str) else str(r["mmsi"]) for _, r in df.iterrows()],
@@ -414,12 +422,19 @@ def port_map(df, tracks_and_spans):
             pdk.Layer("TextLayer", labeled, get_position="position", get_text="name", get_size=13,
                       get_color=ink, get_pixel_offset=[0, -20]),
             # Under the dots, so a vessel's dot stays on top of its own path.
+            # Dashed: a track joins sampled positions, it is not the exact route sailed.
             pdk.Layer("PathLayer", paths, get_path="path", get_color="color", get_width=2,
-                      width_min_pixels=2, opacity=0.7, pickable=True),
-            # Surface-colored ring keeps overlapping dots apart (moored ships sit side by side).
-            pdk.Layer("ScatterplotLayer", vessels, get_position="position", get_fill_color="color",
-                      get_radius=60, radius_min_pixels=4, stroked=True, get_line_color=rgb(c["surface"]),
-                      line_width_min_pixels=1, pickable=True),
+                      width_min_pixels=2, opacity=0.7, pickable=True,
+                      extensions=[{"@@type": "PathStyleExtension", "dash": True}], get_dash_array=[4, 3],
+                      dash_justified=True),
+            # Surface-colored halo keeps overlapping icons apart (moored ships sit side by side).
+            # Quoted: pydeck turns a bare string into a JavaScript expression ("pixels" = an undefined variable).
+            pdk.Layer("ScatterplotLayer", vessels, get_position="position", get_fill_color=rgb(c["surface"]) + [200],
+                      get_radius=11, radius_units="'pixels'"),
+            # Shape = category, color = state; 20 px whatever the zoom (IconLayer sizes are in pixels by
+            # default), so the anchorage stays readable at zoom 11.
+            pdk.Layer("IconLayer", vessels, get_position="position", get_icon="icon", get_color="color",
+                      get_size=20, pickable=True),
         ],
     )
 
