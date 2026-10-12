@@ -1,13 +1,17 @@
-"""Black-box tests for ingest.parse (spec sections 3, 6 and 10).
+"""Black-box tests for ingest.parse, flush and keep_position (spec sections 3, 6, 7, 10 and 13).
 
-Messages are built here in the AISStream envelope format, so the tests do not
-need the network or MongoDB. parse is expected to be pure.
+Messages are built here in the AISStream envelope format and MongoDB is a hand-written
+fake, so the tests need neither the network nor a database. parse is expected to be pure.
 """
 
+import asyncio
 import copy
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from pymongo.errors import AutoReconnect, BulkWriteError
 
+import config
 import ingest
 
 MMSI = 247123450
@@ -186,3 +190,165 @@ def test_position_goes_to_positions_collection():
 def test_static_data_goes_to_vessels_collection():
     collection, _ = ingest.parse(static_msg())
     assert collection == "vessels"
+
+
+# --- flush(db, positions, vessels, states) --------------------------------------------------
+# Spec section 7 point 1 and section 13. The db is a hand-written fake: each
+# collection records its calls in one shared log and can be told to raise.
+# Assumption: flush awaits the collection methods (pymongo AsyncMongoClient), so
+# the fake methods are coroutines; flush is run with asyncio.run.
+# Assumption: the fake records `ordered` whether it is passed by keyword or not.
+
+
+class FakeCollection:
+    def __init__(self, name, log):
+        self.name, self.log, self.error = name, log, None
+
+    async def insert_many(self, documents, ordered=True, **kwargs):
+        self.log.append((self.name, "insert_many", list(documents), ordered))
+        if self.error is not None:
+            raise self.error
+
+    async def bulk_write(self, requests, ordered=True, **kwargs):
+        self.log.append((self.name, "bulk_write", list(requests), ordered))
+        if self.error is not None:
+            raise self.error
+
+
+class FakeDb:
+    def __init__(self):
+        self.log = []
+        self.positions = FakeCollection("positions", self.log)
+        self.vessels = FakeCollection("vessels", self.log)
+        self.states = FakeCollection("states", self.log)
+
+    def __getitem__(self, name):
+        return getattr(self, name)
+
+
+def buffers():
+    positions = [{"mmsi": 1, "n": 1}, {"mmsi": 2, "n": 2}]
+    vessels = {1: "vessel-op-1", 2: "vessel-op-2"}
+    states = ["state-op-1", "state-op-2"]
+    return positions, vessels, states
+
+
+def bulk_error(codes, write_concern_errors=()):
+    return BulkWriteError({
+        "writeErrors": [{"index": i, "code": c, "errmsg": "error"} for i, c in enumerate(codes)],
+        "writeConcernErrors": list(write_concern_errors),
+        "nInserted": 0,
+    })
+
+
+def flush(db, positions, vessels, states):
+    asyncio.run(ingest.flush(db, positions, vessels, states))
+
+
+def test_flush_writes_the_three_buffers_in_order_and_clears_them():
+    db = FakeDb()
+    positions, vessels, states = buffers()
+    expected = [
+        ("positions", "insert_many", list(positions), False),
+        ("vessels", "bulk_write", list(vessels.values()), False),
+        ("states", "bulk_write", list(states), True),
+    ]
+    flush(db, positions, vessels, states)
+    assert db.log == expected
+    assert positions == [] and vessels == {} and states == []
+
+
+def test_flush_skips_empty_buffers():
+    # Each buffer empty in turn: pymongo raises on an empty insert_many or bulk_write.
+    order = ["positions", "vessels", "states"]
+    for empty in order:
+        db = FakeDb()
+        positions, vessels, states = buffers()
+        {"positions": positions, "vessels": vessels, "states": states}[empty].clear()
+        flush(db, positions, vessels, states)
+        assert [name for name, _, _, _ in db.log] == [n for n in order if n != empty], empty
+
+
+def test_flush_counts_duplicate_only_insert_errors_as_written():
+    # Atlas saved the positions but the reply was lost: the retry gets only
+    # 11000 duplicates. The buffer is emptied and vessels and states still go out.
+    db = FakeDb()
+    db.positions.error = bulk_error([11000, 11000])
+    positions, vessels, states = buffers()
+    flush(db, positions, vessels, states)
+    assert positions == [] and vessels == {} and states == []
+    assert [name for name, _, _, _ in db.log] == ["positions", "vessels", "states"]
+
+
+def test_flush_any_other_error_keeps_the_buffer_and_stops():
+    cases = [
+        # (failing collection, error) -- each one must propagate.
+        ("positions", bulk_error([11000, 121])),                       # not only duplicates
+        ("positions", bulk_error([11000], [{"code": 64, "errmsg": "wc"}])),  # write concern error
+        ("positions", AutoReconnect("connection lost")),
+        ("vessels", bulk_error([11000])),            # the duplicate rule is for insert_many only
+        ("states", AutoReconnect("connection lost")),
+    ]
+    order = ["positions", "vessels", "states"]
+    for failing, error in cases:
+        db = FakeDb()
+        getattr(db, failing).error = error
+        positions, vessels, states = buffers()
+        original = {"positions": list(positions), "vessels": dict(vessels), "states": list(states)}
+        current = {"positions": positions, "vessels": vessels, "states": states}
+        with pytest.raises(type(error)):
+            flush(db, positions, vessels, states)
+        idx = order.index(failing)
+        for name in order[:idx]:
+            assert not current[name], (failing, name)                # written before: cleared
+        assert current[failing] == original[failing], failing       # failed: intact
+        for name in order[idx + 1:]:
+            assert current[name] == original[name], (failing, name)  # never touched
+        assert [n for n, _, _, _ in db.log] == order[:idx + 1], failing
+
+
+# --- keep_position(doc, last_saved) ---------------------------------------------------------
+# Spec section 7 point 2 and section 13. Timestamps are years in the past: the
+# rule runs on the AIS time in doc["ts"], not on the wall clock.
+
+T_AIS = datetime(2020, 3, 1, 8, 0, tzinfo=timezone.utc)
+
+
+def sample():
+    return timedelta(seconds=config.SAMPLE_SECONDS)
+
+
+def pos_doc(mmsi, ts):
+    return {"mmsi": mmsi, "ts": ts, "sog": 0.0, "nav_status": 0,
+            "location": {"type": "Point", "coordinates": [LON, LAT]}}
+
+
+def test_keep_position_keeps_first_position_of_a_vessel():
+    last_saved = {}
+    assert ingest.keep_position(pos_doc(1, T_AIS), last_saved) is True
+    assert last_saved == {1: T_AIS}
+
+
+def test_keep_position_spacing_is_measured_from_last_kept_position():
+    last_saved = {1: T_AIS}
+    almost = T_AIS + sample() - timedelta(seconds=1)
+    assert ingest.keep_position(pos_doc(1, almost), last_saved) is False
+    assert last_saved == {1: T_AIS}
+    # One second after the dropped fix, but SAMPLE_SECONDS after the kept one.
+    assert ingest.keep_position(pos_doc(1, T_AIS + sample()), last_saved) is True
+    assert last_saved == {1: T_AIS + sample()}
+
+
+def test_keep_position_drops_late_or_repeated_messages():
+    for ts in (T_AIS, T_AIS - timedelta(seconds=1), T_AIS - 3 * sample()):
+        last_saved = {1: T_AIS}
+        assert ingest.keep_position(pos_doc(1, ts), last_saved) is False, ts
+        assert last_saved == {1: T_AIS}, ts
+
+
+def test_keep_position_vessels_do_not_affect_each_other():
+    last_saved = {1: T_AIS}
+    soon = T_AIS + timedelta(seconds=1)
+    assert ingest.keep_position(pos_doc(2, soon), last_saved) is True
+    assert ingest.keep_position(pos_doc(1, soon), last_saved) is False
+    assert last_saved == {1: T_AIS, 2: soon}

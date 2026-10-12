@@ -544,3 +544,41 @@ def test_archive_since_is_first_whole_hour_inside_ttl_window(minute, second, mic
     window_start = now - ttl()
     assert (result.minute, result.second, result.microsecond) == (0, 0, 0)
     assert window_start <= result < window_start + timedelta(hours=1)
+
+
+# --- hourly_series: the "alone" flag (spec section 13) ----------------------------------------
+# Each row is {hour, anchored, alone}; alone is a bool.
+
+
+def rows(covered_hours, counts=None):
+    covered = [hour(n) for n in covered_hours]
+    counts = {hour(n): 1 for n in covered_hours} if counts is None else counts
+    return {r["hour"]: r for r in history.hourly_series(covered, counts)}
+
+
+def test_alone_marks_a_covered_hour_between_two_gaps():
+    r = rows([0, 2, 4])
+    assert r[hour(2)]["alone"] is True
+
+
+def test_alone_is_false_when_a_neighbour_has_data():
+    # Hour 1 is covered with zero vessels: zero is data, so hour 0 has a neighbour.
+    r = rows([0, 1, 3, 4, 5], counts={hour(0): 3, hour(3): 1, hour(4): 2, hour(5): 1})
+    for n in (0, 1, 3, 4, 5):
+        assert r[hour(n)]["alone"] is False, n
+
+
+def test_alone_on_the_edges_of_the_series():
+    # First and last hour count as alone when their only neighbour is a gap;
+    # a one-hour series has no neighbour with data at all.
+    r = rows([0, 2])
+    assert r[hour(0)]["alone"] is True
+    assert r[hour(2)]["alone"] is True
+    assert rows([7])[hour(7)]["alone"] is True
+
+
+def test_alone_is_false_for_gap_hours():
+    r = rows([0, 3])
+    for n in (1, 2):
+        assert r[hour(n)]["anchored"] is None, n
+        assert r[hour(n)]["alone"] is False, n

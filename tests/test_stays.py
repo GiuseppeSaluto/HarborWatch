@@ -62,6 +62,13 @@ def test_stay_starts_at_first_berth_position():
     assert abs((stay["start"] - (T0 + 10 * STEP)).total_seconds()) <= 120
 
 
+def test_stay_runs_from_first_berth_position_to_first_position_after_it():
+    pos = track(1, [("underway", 10), ("at_berth", 90), ("underway", 5)])
+    stay = measure(pos)[0]
+    assert stay["start"] == T0 + 10 * STEP
+    assert stay["end"] == T0 + 100 * STEP
+
+
 def test_arrival_not_seen_is_not_a_complete_stay():
     pos = track(1, [("at_berth", 120), ("underway", 10)])
     assert measure(pos) == []
@@ -311,3 +318,37 @@ def test_window_is_checked_per_category_default():
     result = service(data, window)
     assert result["passenger"] == 300
     assert result["cargo"] == DEFAULTS["cargo"]
+
+
+# --- measure_stays: exact STALE_MINUTES boundary (spec section 13) -----------------------------
+# The interval between two consecutive positions is checked from the position
+# before the arrival to the one after the departure, so the long interval is
+# placed in turn before the arrival, inside the stay and after the departure.
+# Five positions on each side keep the arrival and departure clear of the
+# single-position noise rule.
+
+GAP_PLACES = ("before_arrival", "inside_stay", "after_departure")
+
+
+def stay_with_interval(place, interval):
+    groups = [("underway", 5, None), ("at_berth", 30, "before_arrival"),
+              ("at_berth", 30, "inside_stay"), ("underway", 5, "after_departure")]
+    out, t = [], T0
+    for state, count, opens_with in groups:
+        for i in range(count):
+            if out:
+                t += interval if (i == 0 and opens_with == place) else STEP
+            out.append({"mmsi": 1, "ts": t, "state": state})
+    return out
+
+
+def test_interval_of_exactly_stale_minutes_keeps_the_stay():
+    exact = timedelta(minutes=config.STALE_MINUTES)
+    for place in GAP_PLACES:
+        assert len(measure(stay_with_interval(place, exact))) == 1, place
+
+
+def test_interval_one_second_over_stale_minutes_drops_the_stay():
+    over = timedelta(minutes=config.STALE_MINUTES, seconds=1)
+    for place in GAP_PLACES:
+        assert measure(stay_with_interval(place, over)) == [], place

@@ -376,3 +376,27 @@ def test_prepare_output_feeds_plan_berths():
     assert set(by) == {1, 2}
     # Berth A is free after 60 minutes; one ship goes to B at 0, the other to A at 60.
     assert sorted(p["start"] for p in by.values()) == [0, 60]
+
+
+# --- plan_berths: "wait" (spec section 13) ----------------------------------------------------
+# wait = start - arrival, also when arrival is not 0.
+
+
+def test_wait_is_zero_for_late_arrival_at_free_berth():
+    by = plan([ship(1, arrival=30)], [berth("A")])
+    assert by[1]["start"] == 30
+    assert by[1]["wait"] == 0
+
+
+def test_wait_counts_from_arrival_not_from_minute_zero():
+    by = plan([ship(1, arrival=40)], [berth("A", free_from=100)])
+    assert by[1]["start"] == 100
+    assert by[1]["wait"] == 60
+
+
+def test_wait_equals_start_minus_arrival_for_every_ship():
+    for ships, berths in CASES:
+        by = plan(ships, berths)
+        for s in ships:
+            p = by[s["mmsi"]]
+            assert p["wait"] == p["start"] - s["arrival"], (s, p)
