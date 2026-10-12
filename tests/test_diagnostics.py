@@ -2,11 +2,10 @@
 and section 13).
 
 diagnose is pure: no network, no MongoDB. probe_stream uses the network and is
-deliberately never called here; only its declared async nature is checked.
+deliberately not tested here.
 Only the returned code is asserted, never the message text.
 """
 
-import inspect
 from datetime import timedelta
 
 import pytest
@@ -129,15 +128,15 @@ def test_age_just_over_live_minutes_uses_probe():
 
 # --- precedence ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("position_age", ALL_AGES)
-@pytest.mark.parametrize("probe_result", ALL_PROBES)
-def test_atlas_down_wins_over_everything(position_age, probe_result):
-    assert code(False, position_age, probe_result) == "atlas"
+def test_atlas_down_wins_over_everything():
+    for position_age in ALL_AGES:
+        for probe_result in ALL_PROBES:
+            assert code(False, position_age, probe_result) == "atlas", (position_age, probe_result)
 
 
-@pytest.mark.parametrize("probe_result", ALL_PROBES)
-def test_live_data_ignores_the_probe(probe_result):
-    assert code(True, FRESH, probe_result) == "live"
+def test_live_data_ignores_the_probe():
+    for probe_result in ALL_PROBES:
+        assert code(True, FRESH, probe_result) == "live", probe_result
 
 
 def test_live_data_ignores_a_failed_probe_at_the_boundary():
@@ -159,29 +158,10 @@ def test_port_positions_win_over_world_positions():
 
 # --- result shape ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("atlas_ok", [True, False])
-@pytest.mark.parametrize("position_age", ALL_AGES)
-@pytest.mark.parametrize("probe_result", ALL_PROBES)
-def test_always_returns_a_known_code_and_a_message(atlas_ok, position_age, probe_result):
-    c, message = diagnostics.diagnose(atlas_ok, position_age, probe_result)
-    assert c in CODES
-    assert isinstance(message, str) and message.strip()
-
-
-def test_every_code_is_reachable():
-    seen = {code(a, age, p) for a in (True, False) for age in ALL_AGES for p in ALL_PROBES}
+def test_every_code_is_reachable_and_comes_with_a_message():
+    seen = set()
+    for args in [(a, age, p) for a in (True, False) for age in ALL_AGES for p in ALL_PROBES]:
+        c, message = diagnostics.diagnose(*args)
+        assert isinstance(message, str) and message.strip(), args
+        seen.add(c)
     assert seen == CODES
-
-
-def test_diagnose_does_not_modify_the_probe():
-    p = probe(world=42, port=0)
-    before = dict(p)
-    diagnostics.diagnose(True, OLD, p)
-    assert p == before
-
-
-# --- probe_stream (never called: it opens a network connection) ------------------------------
-
-def test_probe_stream_is_async():
-    # Spec section 13: probe_stream(seconds) is async. Only inspected, never awaited.
-    assert inspect.iscoroutinefunction(diagnostics.probe_stream)

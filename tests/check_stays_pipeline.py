@@ -1,4 +1,4 @@
-"""Manual check: optimize.stays_pipeline must find the same stays as
+"""Manual check: history.stays_pipeline must find the same stays as
 optimize.measure_stays (spec sections 6 and 9).
 
 This needs a real MongoDB, so it is a standalone script, not a pytest test (the
@@ -41,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import config  # noqa: E402
+import history  # noqa: E402
 import optimize  # noqa: E402
 
 STATES = ("underway", "anchored", "at_berth")
@@ -112,7 +113,7 @@ def compare(collection, docs, label):
     if docs:
         collection.insert_many([dict(d) for d in docs])
     expected = {key(s) for s in optimize.measure_stays([dict(d) for d in docs])}
-    got = {key(s) for s in collection.aggregate(optimize.stays_pipeline(config.STALE_MINUTES))}
+    got = {key(s) for s in collection.aggregate(history.stays_pipeline(config.STALE_MINUTES))}
     if expected == got:
         print(f"{label}: OK ({len(expected)} stays, {len(docs)} positions)")
         return True

@@ -49,11 +49,8 @@ def static_msg(mmsi=MMSI, ship_type=70):
 # discards the message.
 
 def _parse(msg):
-    try:
-        return ingest.parse(copy.deepcopy(msg))
-    except (ValueError, KeyError, TypeError):
-        # Assumption: rejecting by raising is also acceptable validation.
-        return None
+    # No exception allowed: parse runs on every stream message, and a raise would stop the ingestion.
+    return ingest.parse(copy.deepcopy(msg))
 
 
 def _doc(result):

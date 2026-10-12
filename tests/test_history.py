@@ -407,14 +407,6 @@ def test_tracks_gap_of_one_vessel_does_not_split_another():
 
 import random  # noqa: E402
 
-import optimize  # noqa: E402
-
-
-def test_stays_pipeline_is_shared_with_optimize():
-    # Spec: stays_pipeline moved to history; optimize.stays_pipeline stays the same object.
-    assert optimize.stays_pipeline is history.stays_pipeline
-
-
 # vessel_groups(counts, cap): counts is a list of {"_id": mmsi, "n": positions}.
 
 def counts(*ns, first_mmsi=1):

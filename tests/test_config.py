@@ -1,5 +1,7 @@
-"""Black-box tests for config.py: the values the spec fixes, and the berths list
-(spec section 6, "Accosti", and section 10: coherence of berths.json).
+"""Tests for config.py: the hand-written berths list (spec section 6, "Accosti", and section 10:
+coherence of berths.json), and the reason behind LIVE_MINUTES.
+
+Plain values (thresholds, intervals) are not pinned here: changing one on purpose is not a bug.
 
 No external services needed.
 """
@@ -7,42 +9,6 @@ No external services needed.
 import config
 
 COMMERCIAL = {"cargo", "tanker", "passenger"}
-
-
-def test_speed_threshold_is_half_a_knot():
-    assert config.SPEED_THRESHOLD_KN == 0.5
-
-
-def test_quay_distance_is_100_m():
-    assert config.QUAY_DISTANCE_M == 100
-
-
-def test_stale_minutes_is_30():
-    assert config.STALE_MINUTES == 30
-
-
-def test_flush_seconds_is_10():
-    assert config.FLUSH_SECONDS == 10
-
-
-def test_sample_seconds_is_60():
-    assert config.SAMPLE_SECONDS == 60
-
-
-def test_min_stays_is_5():
-    assert config.MIN_STAYS == 5
-
-
-def test_stay_window_factor_is_2():
-    assert config.STAY_WINDOW_FACTOR == 2
-
-
-def test_default_service_minutes_per_category():
-    # Assumption: SERVICE_MINUTES is a dict category -> minutes (spec: "cargo 24 h,
-    # tanker 36 h, passenger 12 h"); the name "minutes" implies the unit.
-    assert config.SERVICE_MINUTES["cargo"] == 24 * 60
-    assert config.SERVICE_MINUTES["tanker"] == 36 * 60
-    assert config.SERVICE_MINUTES["passenger"] == 12 * 60
 
 
 # --- berths (config.BERTHS, loaded from data/berths.json) -------------------------
@@ -116,41 +82,7 @@ def test_cruise_berths_accept_passengers():
         assert "passenger" in b["categories"], b
 
 
-def test_track_hours_is_3():
-    # Spec section 8 point 5: tracks cover the last TRACK_HOURS (3) hours.
-    assert config.TRACK_HOURS == 3
-
-
-def test_track_min_move_is_500_m():
-    # Spec section 8 point 5: only vessels that moved at least 500 m are drawn.
-    assert config.TRACK_MIN_MOVE_M == 500
-
-
-def test_live_minutes_is_2():
-    # Spec section 8 point 6 / section 13: data counts as live up to 2 minutes.
-    assert config.LIVE_MINUTES == 2
-
-
 def test_live_minutes_covers_ais_delay_plus_flush():
     # Spec section 13: LIVE_MINUTES = AIS delay plus FLUSH_SECONDS, with margin.
     # Measured AIS delay, 90th percentile: 10.7 s (spec section 3).
     assert config.LIVE_MINUTES * 60 > 10.7 + config.FLUSH_SECONDS
-
-
-def test_probe_seconds_is_20():
-    assert config.PROBE_SECONDS == 20
-
-
-def test_min_stay_vessel_is_100_m():
-    # Spec sections 9 and 13: only vessels of at least 100 m count for stay durations.
-    assert config.MIN_STAY_VESSEL_M == 100
-
-
-def test_archive_minutes_is_10():
-    # Spec section 8 point 7 / section 13: archiving runs every 10 minutes.
-    assert config.ARCHIVE_MINUTES == 10
-
-
-def test_positions_ttl_days_is_7():
-    # Spec section 8 point 7: positions expire after POSITIONS_TTL_DAYS (7) days.
-    assert config.POSITIONS_TTL_DAYS == 7

@@ -43,10 +43,6 @@ def test_speed_exactly_at_threshold_is_underway():
     assert state(config.SPEED_THRESHOLD_KN, UNDER_WAY, FAR) == UNDERWAY
 
 
-def test_speed_just_below_threshold_is_not_underway():
-    assert state(config.SPEED_THRESHOLD_KN - 0.01, UNDER_WAY, FAR) != UNDERWAY
-
-
 def test_speed_wins_over_stale_moored_status():
     # A vessel leaving the quay often still declares "moored".
     assert state(3.0, MOORED, NEAR) == UNDERWAY

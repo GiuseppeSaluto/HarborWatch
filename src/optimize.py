@@ -9,7 +9,6 @@ from ortools.sat.python import cp_model
 
 import config
 from classify import COMMERCIAL, ship_category
-from history import stays_pipeline  # noqa: F401  (lives in history: the ingestion must not load OR-Tools)
 
 # Hard cap on solving time; past it CP-SAT returns the best plan found so far.
 # Known limit: ~10 vessels solve to optimality in milliseconds, 20+ hit the cap and return
