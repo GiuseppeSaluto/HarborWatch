@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import websockets
 from pymongo import ASCENDING, GEOSPHERE, AsyncMongoClient, UpdateOne
-from pymongo.errors import PyMongoError
+from pymongo.errors import BulkWriteError, PyMongoError
 
 import config
 from classify import COMMERCIAL, classify, coast_distance_m, ship_category
@@ -121,9 +121,14 @@ async def flush(db, positions, vessels, states):
     If a write fails, the buffers not yet written are kept and retried at the next flush.
     """
     if positions:
-        # Known limit: a partial failure here (rare: retryable writes cover network blips)
-        # would re-insert the already written docs next time and hit duplicate _id errors.
-        await db.positions.insert_many(positions, ordered=False)
+        try:
+            await db.positions.insert_many(positions, ordered=False)
+        except BulkWriteError as exc:
+            # A retry of a write whose reply got lost: insert_many set the _ids in place, so the
+            # docs already stored come back as duplicates. Without this the buffer never empties.
+            if exc.details.get("writeConcernErrors") or any(
+                    e["code"] != 11000 for e in exc.details["writeErrors"]):
+                raise
         positions.clear()
     if vessels:
         await db.vessels.bulk_write(list(vessels.values()), ordered=False)
