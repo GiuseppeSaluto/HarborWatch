@@ -35,9 +35,11 @@ STATS_SECONDS = 600
 # Dashboard times are the port's local time, whoever looks at it and from wherever.
 TIMEZONE = "Europe/Rome"
 
-# Dashboard: vessels not heard from in this long are considered gone (left the area,
-# or AIS switched off). Moored and anchored vessels transmit every few minutes.
-STALE_MINUTES = 30
+# Vessels not heard from in this long are considered gone (left the area, or AIS switched
+# off); a longer silence also restarts a state and breaks a stay. Moored and anchored vessels
+# transmit every few minutes, but in Genoa single vessels often go unheard for 30-60 minutes:
+# at 30, 9 in 10 complete stays were discarded and waits at anchor restarted (2026-10-14).
+STALE_MINUTES = 60
 
 # Data count as live while the last position is at most this old: AIS delay (~10 s) plus
 # FLUSH_SECONDS, with margin.
