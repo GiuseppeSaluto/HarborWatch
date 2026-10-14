@@ -4,7 +4,7 @@
 
 Real-time port congestion monitor and berth allocation optimizer for the Port of Genoa, built on live AIS ship-tracking data.
 
-![Dashboard: diagnostics sidebar, data status panel, vessels by state, port map with vessel tracks, and hourly congestion](docs/dashboard.png)
+![Dashboard: data status, vessels by state, port map with vessel tracks, vessels waiting at anchor and hourly congestion](docs/dashboard.png)
 
 ## What it does
 
@@ -12,7 +12,7 @@ Real-time port congestion monitor and berth allocation optimizer for the Port of
 - **Tracks congestion over time.** An hourly series of commercial vessels at anchor, with gaps where no data was collected rather than misleading zeros.
 - **Proposes a berth plan.** A constraint-programming model (OR-Tools CP-SAT) assigns every waiting vessel a compatible berth and a mooring time, minimizing the total wait, around the vessels already moored.
 - **Says how far to trust itself.** A status badge and panel show data freshness, continuous collection time, which stay durations are measured and which are still defaults, and database usage. Vessels the plan cannot place are listed, not dropped.
-- **Diagnoses its own outages.** When data stop, a sidebar check tells which link broke: the database, the ingestion, or the AIS feed itself (no coverage over the port, or the service down).
+- **Diagnoses its own outages.** When data stop, the Status panel tells which link broke: the database, the ingestion, or the AIS feed itself (no coverage over the port, or the service down).
 
 Hovering the map shows each vessel's name, type, length, state and speed, and each berth area's berths and accepted vessel types:
 

@@ -103,75 +103,85 @@ st.title("HarborWatch: Port of Genoa")
 @st.fragment(run_every="60s")  # reruns only this function, so the page doesn't flicker
 def dashboard():
     now = pd.Timestamp(datetime.now(UTC))
-    try:
-        data_status(now)  # before the empty check: it matters most when the ingestion is down
-        df = load_states(get_db(), now)
-    except ConnectionFailure:  # network, DNS, IP access list; other errors must show
-        st.error("Cannot reach MongoDB Atlas: see Diagnostics in the sidebar.", icon=":material/cloud_off:")
+    # The page in order of trust (spec section 8, point 9): the port now, its history, then the
+    # model's proposal. The status comes first: it matters most when something is down.
+    with st.container(horizontal=True, vertical_alignment="center"):
+        atlas_ok = status_row(now)
+        commercial_only = st.toggle("Commercial vessels only", value=True,
+                                    help="Cargo, tanker and passenger ships: tugs, pilot boats and yachts "
+                                         "are the life of the port, not congestion.")
+        show_tracks = st.toggle("Show tracks", value=True,
+                                help=f"Paths of the last {config.TRACK_HOURS} h, for vessels that moved at least "
+                                     f"{config.TRACK_MIN_MOVE_M} m")
+    if not atlas_ok:
+        st.error("Cannot reach MongoDB Atlas: open Status for the diagnosis.", icon=":material/cloud_off:")
         return
+    df = load_states(get_db(), now)
     if df.empty:
-        st.warning(f"No vessel heard from in the last {config.STALE_MINUTES} minutes: is ingest.py running?")
+        st.warning(f"No vessel heard from in the last {config.STALE_MINUTES} minutes: is the ingestion running?")
         return
 
     df["type"] = df["ship_type"].map(ship_category)
     everyone = df  # the berth plan needs every moored vessel, whatever the toggle says
     heard = len(df)
-    if st.toggle("Commercial vessels only (cargo, tanker, passenger)", value=True):
+    if commercial_only:
         df = df[df["type"].isin(COMMERCIAL)]
     hidden = heard - len(df)
 
-    # Known limit: `since` is the first time *we* saw the vessel in this state, so vessels
-    # already at anchor when the ingestion started show a shorter wait than the real one.
-    anchored = df[df["state"] == "anchored"].assign(wait=lambda d: now - pd.to_datetime(d["since"], utc=True))
+    # `since` is the first time *we* saw the vessel in this state: when we did not see it begin
+    # (since_seen false: ingestion restart, or a vessel unheard for over STALE_MINUTES), the
+    # wait is only a lower bound, and the list says so.
+    anchored = df[df["state"] == "anchored"].assign(
+        wait=lambda d: now - pd.to_datetime(d["since"], utc=True),
+        seen=lambda d: d["since_seen"].eq(True) if "since_seen" in d else False)
     counts = df["state"].value_counts()
 
-    # Sparkline in the "At anchor" card: the hourly series of the chart below, last 24 hours with data.
-    trend = congestion_history()
-    trend = trend["anchored"].dropna().tail(24).tolist() if not trend.empty else []
-    cols = st.columns(5)
-    for col, state in zip(cols, LABELS):
-        spark = {"chart_data": trend, "chart_type": "area",
-                 "help": "Trend: commercial vessels at anchor per hour, last 24 hours with data"} \
-            if state == "anchored" and len(trend) > 1 else {}
-        # height="stretch": cards without a sparkline grow to the row's height, so the row stays even.
-        # The keyed container lets state_card_css() paint the card in its state's map color.
-        with col.container(key=f"state-{state}", height="stretch"):
-            st.metric(LABELS[state], int(counts.get(state, 0)), border=True, icon=ICONS[state], height="stretch", **spark)
-    st.markdown(state_card_css(), unsafe_allow_html=True)
-    cols[3].metric("Mean wait at anchor", fmt(anchored["wait"].mean()) if len(anchored) else "-",
-                   border=True, icon=":material/hourglass_top:", height="stretch")
-    cols[4].metric("Max wait at anchor", fmt(anchored["wait"].max()) if len(anchored) else "-",
-                   border=True, icon=":material/schedule:", height="stretch")
+    unseen = int((~anchored["seen"]).sum())
+    # A wrapping row instead of columns: four cards in a row on a wide screen, two by two on a
+    # phone (columns would stack them one per row, a whole screen before the map).
+    with st.container(horizontal=True, key="cards"):
+        for state in LABELS:
+            # The keyed container lets state_card_css() paint the card in its state's map color.
+            with st.container(key=f"state-{state}"):
+                st.metric(LABELS[state], int(counts.get(state, 0)), border=True, icon=ICONS[state])
+        st.metric("Mean wait", fmt(anchored["wait"].mean()) if len(anchored) else "-",
+                  border=True, icon=":material/hourglass_top:",
+                  help="Mean wait of the vessels at anchor now." + (
+                      f" {unseen} of {len(anchored)} arrived before we saw them: the real mean is longer." if unseen else ""))
+    st.html(state_card_css())
 
-    show_tracks = st.toggle("Show tracks", value=True,
-                            help=f"Paths of the last {config.TRACK_HOURS} h, for vessels that moved at least "
-                                 f"{config.TRACK_MIN_MOVE_M} m")
-    st.pydeck_chart(port_map(df, recent_tracks() if show_tracks else ([], {})), height=520)
-    st.caption(legend(df) + f" · lines: paths of the last {config.TRACK_HOURS} h · rings: berth areas from "
-               "data/berths.json · hover for details", unsafe_allow_html=True)
+    left, right = st.columns([2, 1], gap="medium")
+    with left:
+        st.pydeck_chart(port_map(df, recent_tracks() if show_tracks else ([], {})), height=560)
+        st.caption(legend(df) + f" · dashed lines: last {config.TRACK_HOURS} h · circles: berth areas · "
+                   "hover for details", unsafe_allow_html=True)
+    with right:
+        st.subheader("Waiting at anchor")
+        if anchored.empty:
+            st.write("No vessel at anchor.")
+        else:
+            waiting = anchored.sort_values("wait", ascending=False)
+            st.dataframe(pd.DataFrame({
+                "vessel": [r["name"] if isinstance(r["name"], str) else str(r["mmsi"]) for _, r in waiting.iterrows()],
+                "type": waiting["type"], "length": waiting["length"],
+                "wait": [("" if r["seen"] else "≥ ") + fmt(r["wait"]) for _, r in waiting.iterrows()],
+            }), hide_index=True)
+            if unseen:
+                st.caption("≥: we did not see the vessel arrive, so it has been waiting at least this long.")
+        # The anchorage now and its history side by side: both are about the same vessels.
+        st.markdown("**At anchor, per hour**")
+        history = congestion_history()
+        if history.empty:
+            st.write("No history yet.")
+        else:
+            st.altair_chart(congestion_chart(history), width="stretch")
+            st.caption("Commercial vessels seen at anchor each hour (Genoa time). "
+                       "Gaps: hours without data, not empty anchorages.")
 
-    st.subheader("Commercial vessels at anchor, per hour")
-    history = congestion_history()
-    if history.empty:
-        st.write("No history yet.")
-    else:
-        st.altair_chart(congestion_chart(history), width="stretch")
-        st.caption("Distinct commercial vessels seen at anchor during each hour (Genoa time). "
-                   "Gaps are hours when the ingestion was off, not empty anchorages.")
-
-    st.subheader("Waiting at anchor")
-    if anchored.empty:
-        st.write("No vessel at anchor.")
-    else:
-        st.dataframe(
-            anchored.sort_values("wait", ascending=False)
-            .assign(wait=lambda d: d["wait"].map(fmt))[["name", "mmsi", "type", "length", "destination", "wait"]],
-            hide_index=True,
-        )
     berth_plan(everyone, now)
 
     st.caption(f"Updated {local(now):%H:%M:%S %Z} · vessels heard from in the last {config.STALE_MINUTES} min · "
-               f"{hidden} hidden (tugs, yachts, service craft, or type not received yet) · "
+               f"{hidden} other vessels hidden (tugs, yachts, service craft, or type not received yet) · "
                "map © OpenStreetMap contributors")
 
 
@@ -219,7 +229,8 @@ def berth_plan(df, now):
     if not plan:
         st.write("No commercial vessel at anchor that fits a known berth.")
         return
-    st.altair_chart(gantt(plan, berths, now, names), width="stretch")
+    shown = {b["name"] for b in berths if b["free_from"]} | {p["berth"] for p in plan}
+    st.altair_chart(gantt(plan, [b for b in berths if b["name"] in shown], now, names), width="stretch")
     with st.expander("Table view"):
         st.dataframe(pd.DataFrame([{
             "vessel": names[p["mmsi"]], "berth": p["berth"],
@@ -231,10 +242,13 @@ def berth_plan(df, now):
     left_out = [f"{names[v['mmsi']]} ({v['category']}, " + (f"{v['length']:g} m" if v["length"] else "length unknown") + ")"
                 for v in unfit]
     if left_out:
-        st.caption("Not planned, no known berth fits (berth lengths in data/berths.json are partly observed, "
-                   "so they can be too short) or length unknown: " + ", ".join(left_out))
+        st.caption("Not planned, no known berth fits (some berth lengths are our estimates, so they can be "
+                   "too short) or length unknown: " + ", ".join(left_out))
     busy = sum(1 for b in berths if b["free_from"])
-    st.caption(f"Minimizes the total wait over {len(berths)} berths ({busy} busy now) in data/berths.json. "
+    st.caption(f"A simple model's proposal: it minimizes the total wait over {len(berths)} known berths "
+               f"({busy} busy now, {len(berths) - len(shown)} free ones without a proposal not shown), from vessel "
+               "length and type only. Real waits also depend on weather, pilots and commercial reasons: tankers "
+               "often wait at anchor while a fitting berth is free. "
                "Expected stays: " + ", ".join(
                    f"{c} {m // 60} h " + (
                        f"(median of {counts[c]} observed)"
@@ -245,45 +259,54 @@ def berth_plan(df, now):
                    for c, m in service.items()) + ". Vessels we did not see arrive are assumed halfway through their stay.")
 
 
-def data_status(now):
-    """How far to trust the page: data freshness, continuity, measured stays, storage."""
-    db = get_db()
-    last = db.positions.find_one(sort=[("ts", -1)], projection={"ts": 1})
-    age = now - pd.Timestamp(last["ts"]) if last else None
-    if age is None or age > timedelta(minutes=config.STALE_MINUTES):
+def status_row(now):
+    """The page's one status (spec section 8, point 9): a badge for the data, and a Status
+    popover with the numbers behind it and the diagnostics. Returns whether Atlas answered."""
+    try:
+        last = get_db().positions.find_one(sort=[("ts", -1)], projection={"ts": 1})
+        atlas_ok, age = True, now - pd.Timestamp(last["ts"]) if last else None
+    except ConnectionFailure:  # network, DNS, IP access list; other errors must show
+        atlas_ok, age = False, None
+    if not atlas_ok:
+        status, icon, color = "unreachable", ":material/cloud_off:", "red"
+    elif age is None or age > timedelta(minutes=config.STALE_MINUTES):
         status, icon, color = "stopped", ":material/block:", "red"
     elif age > timedelta(minutes=config.LIVE_MINUTES):
         status, icon, color = "delayed", ":material/warning:", "orange"
     else:
         status, icon, color = "live", ":material/check_circle:", "green"
+    # Status colors are for status only, and always come with an icon and a word.
+    st.badge(f"Data {status}" + ("" if age is None else f" · last position {fmt_age(age)}"), icon=icon, color=color)
+    with st.popover("Status", icon=":material/monitor_heart:"):
+        if atlas_ok:
+            data_numbers(age, status == "stopped")
+        diagnostics_panel(atlas_ok, age)
+    return atlas_ok
 
+
+def data_numbers(age, stopped):
+    """How far to trust the page: data freshness, continuity, measured stays, storage."""
     # Continuity at hour resolution, reusing the cached hourly series: count back from the
     # last hour with data to the first hour without.
     history = congestion_history()
     hours = continuous_hours(history["anchored"].tolist() if not history.empty else [])
-
     _, counts, window = stay_estimates()
     measured = [c for c, n in counts.items() if trusted_stay(n, config.SERVICE_MINUTES[c], window, config.MIN_STAYS)]
-    stats = db.command("dbStats")
+    stats = get_db().command("dbStats")
     used_mb = (stats["dataSize"] + stats["indexSize"]) / 2**20
-
-    stopped = status == "stopped"
-    run = f"last run {hours} h" if stopped else f"{hours} h continuous"  # hours belong to the past run
-    # Status colors are for status only, and always come with an icon and a word.
-    st.badge(f"Data {status}" + ("" if age is None else f" · last position {fmt_age(age)}"), icon=icon, color=color)
-    with st.expander(f"Data status: {status}, {run}", icon=icon):
-        cols = st.columns(4)
-        cols[0].metric("Last position", "never" if age is None else fmt_age(age), help=status)
-        cols[1].metric("Continuous collection", "0 h" if stopped else f"{hours} h",
-                       help=f"Hours in a row with data, up to now{f' (the last run lasted {hours} h)' if stopped else ''}. "
-                            "The berth plan and the stay estimates need days of it.")
-        cols[2].metric("Measured stays", f"{len(measured)} of {len(counts)} categories",
-                       help=", ".join(f"{c}: {n} of {config.MIN_STAYS} stays" for c, n in counts.items()) +
-                            f"; longest continuous collection {window // 60} h. A category needs {config.MIN_STAYS} "
-                            f"stays and a continuous window of {config.STAY_WINDOW_FACTOR}x its default stay; "
-                            "otherwise it uses the default.")
-        cols[3].metric("Atlas storage", f"{used_mb:.1f} MB", help=f"of {config.STORAGE_LIMIT_MB} MB "
-                       f"({100 * used_mb / config.STORAGE_LIMIT_MB:.1f}%); the TTL keeps it near ~70 MB")
+    cols = st.columns(2)
+    cols[0].metric("Last position", "never" if age is None else fmt_age(age))
+    cols[1].metric("Continuous collection", "0 h" if stopped else f"{hours} h",
+                   help=f"Hours in a row with data, up to now{f' (the last run lasted {hours} h)' if stopped else ''}. "
+                        "The berth plan and the stay estimates need days of it.")
+    cols = st.columns(2)
+    cols[0].metric("Categories measured", f"{len(measured)} of {len(counts)}",
+                   help=", ".join(f"{c}: {n} of {config.MIN_STAYS} stays" for c, n in counts.items()) +
+                        f"; longest continuous collection {window // 60} h. A category needs {config.MIN_STAYS} "
+                        f"stays and a continuous window of {config.STAY_WINDOW_FACTOR}x its default stay; "
+                        "otherwise it uses the default.")
+    cols[1].metric("Atlas storage", f"{used_mb:.1f} MB", help=f"of {config.STORAGE_LIMIT_MB} MB "
+                   f"({100 * used_mb / config.STORAGE_LIMIT_MB:.1f}%); the TTL keeps it near ~70 MB")
 
 
 # Badge per diagnosis: (label, icon, color). Status colors as in the data badge: green when fine,
@@ -299,15 +322,9 @@ DIAGNOSIS_BADGES = {
 }
 
 
-@st.fragment(run_every="60s")
-def diagnostics_panel():
+def diagnostics_panel(atlas_ok, age):
     """Which link is broken when data stop: Atlas, the ingestion or AISStream (spec section 8, point 6)."""
-    st.subheader("Diagnostics")
-    try:
-        last = get_db().positions.find_one(sort=[("ts", -1)], projection={"ts": 1})
-        atlas_ok, age = True, datetime.now(UTC) - last["ts"] if last else None
-    except ConnectionFailure:  # network, DNS, IP access list; other errors must show
-        atlas_ok, age = False, None
+    st.markdown("**Diagnostics**")
     # The stream check opens a connection of its own, so it runs only on request, never on the
     # minute refresh: AISStream allows 3 connections per key, and the ingestion uses one.
     if st.button("Check the stream", icon=":material/network_check:",
@@ -326,13 +343,12 @@ def diagnostics_panel():
 
 
 def state_card_css():
-    """Tie each state card to the map: accent line, icon and sparkline in the state's dot color."""
+    """Tie each state card to the map: accent line and icon in the state's dot color."""
     c = colors()
-    return "<style>" + "".join(
+    # Cards share the row equally and wrap two by two below ~4 x 170 px.
+    return "<style>.st-key-cards > div {flex: 1 1 170px; min-width: 150px;}" + "".join(
         f".st-key-state-{s} [data-testid=stMetric] {{box-shadow: inset 0 3px 0 {c[s]};}}"
         f".st-key-state-{s} [data-testid=stMetricIcon] {{color: {c[s]};}}"
-        f".st-key-state-{s} [data-testid=stMetricChart] path[aria-roledescription='area mark'] {{fill: {c[s]}; fill-opacity: 0.25;}}"
-        f".st-key-state-{s} [data-testid=stMetricChart] path[aria-roledescription='line mark'] {{stroke: {c[s]};}}"
         for s in LABELS) + "</style>"
 
 
@@ -444,7 +460,7 @@ def congestion_chart(history):
     c = colors()
     hover = alt.selection_point(on="pointerover", nearest=True, fields=["hour"], empty=False, clear="pointerout")
     base = alt.Chart(history).encode(
-        x=alt.X("hour:T", title=None, scale=alt.Scale(type="utc"), axis=alt.Axis(format="%a %H:%M", grid=False)))
+        x=alt.X("hour:T", title=None, scale=alt.Scale(type="utc"), axis=alt.Axis(format="%a", grid=False, tickCount={"interval": "day", "step": 1})))  # one label a day
     line = base.mark_line(color=c["anchored"], strokeWidth=2).encode(
         y=alt.Y("anchored:Q", title="vessels", axis=alt.Axis(tickMinStep=1)))
     points = base.mark_point(filled=True, size=80, color=c["anchored"]).encode(
@@ -485,8 +501,5 @@ def gantt(plan, berths, now, names):
     ).properties(height=30 * len(berths))
 
 
-with st.sidebar:
-    # Here, not under the title: the style element would add a gap there. Its rules are page-wide.
-    st.markdown(header_grid_css(), unsafe_allow_html=True)
-    diagnostics_panel()
+st.html(header_grid_css())  # style only: st.html applies it without taking space on the page
 dashboard()
