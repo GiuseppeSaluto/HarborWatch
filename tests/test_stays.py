@@ -158,6 +158,37 @@ def test_one_vessel_gap_does_not_affect_another():
     assert len(stays_of(result, 2)) == 1
 
 
+# Edges of the noise rule (spec section 13): a position is corrected only with a
+# neighbour on both sides, of the same vessel, in the same state as each other.
+
+def test_first_position_of_a_vessel_is_never_corrected_as_noise():
+    # The lone underway fix has a neighbour on one side only: it stays, so the
+    # arrival is seen on the second position. The vessel's last fix is at_berth,
+    # like the second one: code that wraps around (index -1) and takes the last
+    # fix as the first one's "previous neighbour" would see at_berth on both
+    # sides, correct the first fix and lose the arrival. The final at_berth fix
+    # forms no stay, because its departure is not seen.
+    pos = track(1, [("underway", 1), ("at_berth", 60), ("underway", 5), ("at_berth", 1)])
+    assert measure(pos) == [{"mmsi": 1, "start": T0 + STEP, "end": T0 + 61 * STEP}]
+
+
+def test_departure_on_the_last_position_closes_the_stay():
+    # The last fix is the only one after the berth run: it is not noise and its
+    # ts is the end. Vessel 2 sits at berth around it, to check that neighbours
+    # are taken from the same vessel only.
+    a = track(1, [("underway", 5), ("at_berth", 60), ("underway", 1)])
+    b = track(2, [("at_berth", 80)], start=T0 + 30 * STEP)
+    result = measure(sorted(a + b, key=lambda p: p["ts"]))
+    assert stays_of(result, 1) == [{"mmsi": 1, "start": T0 + 5 * STEP, "end": T0 + 65 * STEP}]
+
+
+def test_single_position_between_two_different_states_is_not_noise():
+    # The anchored fix has neighbours on both sides, but in different states
+    # (at_berth before, underway after): it is a real departure and ends the stay.
+    pos = track(1, [("underway", 5), ("at_berth", 60), ("anchored", 1), ("underway", 5)])
+    assert measure(pos) == [{"mmsi": 1, "start": T0 + 5 * STEP, "end": T0 + 65 * STEP}]
+
+
 # --- service_minutes -------------------------------------------------------------------
 # Interface (spec section 13): optimize.service_minutes(stays, window_minutes)
 # takes stay dicts {"category", "length" (metres), "minutes"} plus the length of

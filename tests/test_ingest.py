@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pymongo.errors import AutoReconnect, BulkWriteError
 
+import classify
 import config
 import ingest
 
@@ -192,6 +193,22 @@ def test_static_data_goes_to_vessels_collection():
     assert collection == "vessels"
 
 
+# --- MMSI range (spec section 13): integer from 1 to 999 999 999 inclusive ------------------
+
+def test_mmsi_range_edges_are_accepted():
+    for mmsi in (1, 999_999_999):
+        for build in (position_msg, static_msg):
+            doc = _doc(_parse(build(mmsi=mmsi)))
+            assert doc is not None, (build.__name__, mmsi)
+            assert doc["mmsi"] == mmsi, (build.__name__, mmsi)
+
+
+def test_mmsi_out_of_range_or_not_integer_is_rejected():
+    for mmsi in (0, -1, 1_000_000_000, 247123450.5, "247123450"):
+        for build in (position_msg, static_msg):
+            assert _parse(build(mmsi=mmsi)) is None, (build.__name__, mmsi)
+
+
 # --- flush(db, positions, vessels, states) --------------------------------------------------
 # Spec section 7 point 1 and section 13. The db is a hand-written fake: each
 # collection records its calls in one shared log and can be told to raise.
@@ -352,3 +369,42 @@ def test_keep_position_vessels_do_not_affect_each_other():
     assert ingest.keep_position(pos_doc(2, soon), last_saved) is True
     assert ingest.keep_position(pos_doc(1, soon), last_saved) is False
     assert last_saved == {1: T_AIS, 2: soon}
+
+
+# --- state_fields(doc) (spec section 13) -----------------------------------------------------
+# Input is a position already validated by parse. Expected states are computed
+# with the classify functions exactly as the spec writes them:
+# classify(sog, nav_status, coast_distance_m(lon, lat)).
+
+SEA = (8.85, 44.34)       # open sea south of Genoa, kilometres from the coast
+
+
+def parsed_position(lat, lon, sog, nav_status):
+    return _doc(_parse(position_msg(lat=lat, lon=lon, sog=sog, nav_status=nav_status)))
+
+
+def test_state_fields_copies_the_position_fields():
+    doc = parsed_position(LAT, LON, 3.4, 0)
+    fields = ingest.state_fields(doc)
+    for key in ("mmsi", "ts", "location", "sog"):
+        assert fields[key] == doc[key], key
+    # Literal reading of section 13: those four fields plus state, nothing else.
+    assert set(fields) == {"mmsi", "ts", "location", "sog", "state"}
+
+
+def test_state_fields_state_is_classify_on_the_document_position():
+    berth = config.BERTHS[0]
+    cases = [
+        (SEA[1], SEA[0], 5.0, 0),               # moving: speed decides
+        (SEA[1], SEA[0], 0.0, 5),               # "moored" status far from the coast
+        (SEA[1], SEA[0], 0.0, 0),               # stopped at sea
+        (berth["lat"], berth["lon"], 0.0, 0),   # stopped at a berth point: lon/lat order matters
+    ]
+    seen = set()
+    for lat, lon, sog, nav in cases:
+        doc = parsed_position(lat, lon, sog, nav)
+        expected = classify.classify(sog, nav, classify.coast_distance_m(lon, lat))
+        assert ingest.state_fields(doc)["state"] == expected, (lat, lon, sog, nav)
+        seen.add(expected)
+    # The cases must really exercise different states, or the test proves little.
+    assert {"underway", "at_berth", "anchored"} <= seen

@@ -164,6 +164,21 @@ def test_continuous_hours_treats_nan_as_gap():
     assert history.continuous_hours([1, 1, NAN, 1]) == 1
 
 
+def test_continuous_hours_on_a_float_column():
+    # Spec section 13: values may come from a pandas float column. NaN is a gap
+    # like None; any float, 0.0 included, is data.
+    assert history.continuous_hours([NAN, 3.0, 0.0]) == 2
+    assert history.continuous_hours([0.0]) == 1
+    assert history.continuous_hours([3.0, 0.0, NAN]) == 0
+    assert history.continuous_hours([None, 0.0, NAN, 3.0]) == 1
+
+
+def test_longest_run_on_a_float_column():
+    assert history.longest_run([3.0, 0.0, NAN, 1.0]) == 2
+    assert history.longest_run([0.0, 0.0, 0.0]) == 3
+    assert history.longest_run([NAN, 0.0, None, 2.5, 0.0, 1.0, NAN]) == 3
+
+
 def test_continuous_hours_never_exceeds_longest_run():
     values = [1, 1, 1, None, 1, 1, None, None, 1, 0, 1, 1, 1, 1]
     assert history.continuous_hours(values) <= history.longest_run(values)

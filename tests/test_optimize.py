@@ -224,6 +224,12 @@ CASES = [
 ]
 
 
+def test_plan_without_ships_is_an_empty_list():
+    # Spec section 13: [] (not None), also with occupied berths.
+    for berths in ([], [berth("A")], [berth("A", free_from=100), berth("B", free_from=30)]):
+        assert optimize.plan_berths([], berths) == [], berths
+
+
 @pytest.mark.parametrize("ships,berths", CASES)
 def test_plan_matches_brute_force_optimum(ships, berths):
     by = plan(ships, berths)

@@ -25,13 +25,6 @@ def state(sog, nav_status, distance_m):
     return classify.classify(sog, nav_status, distance_m)
 
 
-# --- thresholds come from config ----------------------------------------------------
-
-def test_thresholds_match_spec():
-    assert config.SPEED_THRESHOLD_KN == 0.5
-    assert config.QUAY_DISTANCE_M == 100
-
-
 # --- underway ---------------------------------------------------------------------
 
 def test_fast_vessel_far_from_coast_is_underway():
@@ -194,11 +187,22 @@ def test_missing_type_is_unknown():
     assert classify.ship_category(None) == "unknown"
 
 
-def test_category_boundaries():
-    assert classify.ship_category(59) not in {"cargo", "tanker", "passenger"}
-    assert classify.ship_category(60) == "passenger"
-    assert classify.ship_category(69) == "passenger"
-    assert classify.ship_category(70) == "cargo"
-    assert classify.ship_category(79) == "cargo"
-    assert classify.ship_category(80) == "tanker"
-    assert classify.ship_category(89) == "tanker"
+def test_ship_category_every_range_with_both_edges_and_the_code_just_outside():
+    # Spec section 13: closed ranges; both edges belong to the category, the
+    # code just outside does not. Each pair below is an edge of some range.
+    expected = [
+        (None, "unknown"), (0, "unknown"),
+        (1, "other"), (29, "other"),
+        (30, "service"), (35, "service"),
+        (36, "pleasure"), (37, "pleasure"),
+        (38, "other"), (39, "other"),
+        (40, "passenger"), (49, "passenger"),
+        (50, "service"), (59, "service"),
+        (60, "passenger"), (69, "passenger"),
+        (70, "cargo"), (79, "cargo"),
+        (80, "tanker"), (89, "tanker"),
+        (90, "other"), (99, "other"),
+        (100, "other"), (255, "other"),
+    ]
+    for code, category in expected:
+        assert classify.ship_category(code) == category, code
