@@ -6,7 +6,9 @@ fake, so the tests need neither the network nor a database. parse is expected to
 
 import asyncio
 import copy
+import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pymongo.errors import AutoReconnect, BulkWriteError
@@ -207,6 +209,63 @@ def test_mmsi_out_of_range_or_not_integer_is_rejected():
     for mmsi in (0, -1, 1_000_000_000, 247123450.5, "247123450"):
         for build in (position_msg, static_msg):
             assert _parse(build(mmsi=mmsi)) is None, (build.__name__, mmsi)
+
+
+@pytest.mark.parametrize("msg", [None, [], "invalid", {"Message": None},
+                                {"MessageType": []}, {"MetaData": None}])
+def test_malformed_envelope_is_rejected(msg):
+    assert ingest.parse(msg) is None
+
+
+@pytest.mark.parametrize("value", [None, 123, "", "invalid", "2026-02-30 10:00:00"])
+def test_invalid_timestamp_is_rejected(value):
+    msg = position_msg()
+    msg["MetaData"]["time_utc"] = value
+    assert ingest.parse(msg) is None
+
+
+def test_missing_timestamp_is_rejected():
+    msg = position_msg()
+    del msg["MetaData"]["time_utc"]
+    assert ingest.parse(msg) is None
+
+
+@pytest.mark.parametrize("field", ["Latitude", "Longitude", "Sog"])
+def test_non_numeric_position_is_rejected(field):
+    msg = position_msg()
+    msg["Message"]["PositionReport"][field] = "invalid"
+    assert ingest.parse(msg) is None
+
+
+@pytest.mark.parametrize("field,value", [("Dimension", None), ("Dimension", {"A": "invalid"}),
+                                        ("Name", None), ("Destination", 123)])
+def test_malformed_static_data_is_rejected(field, value):
+    msg = static_msg()
+    msg["Message"]["ShipStaticData"][field] = value
+    assert ingest.parse(msg) is None
+
+
+def test_ingestion_continues_after_malformed_messages(monkeypatch):
+    db = FakeDb()
+    client = MagicMock()
+    client.__getitem__.return_value = db
+    client.close = AsyncMock()
+    ws = AsyncMock()
+    ws.recv.side_effect = ["invalid json", "null", json.dumps(position_msg(lat="invalid")),
+                           json.dumps(position_msg()), asyncio.CancelledError()]
+
+    async def connections(*args):
+        yield ws
+
+    monkeypatch.setattr(ingest, "AsyncMongoClient", lambda uri: client)
+    monkeypatch.setattr(ingest.websockets, "connect", connections)
+    monkeypatch.setattr(ingest, "ensure_indexes", AsyncMock())
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(ingest.main())
+    stored = db.log[0][2]
+    assert len(stored) == 1
+    assert stored[0]["mmsi"] == MMSI
+    client.close.assert_awaited_once()
 
 
 # --- flush(db, positions, vessels, states) --------------------------------------------------
