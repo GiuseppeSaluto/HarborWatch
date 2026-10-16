@@ -96,6 +96,11 @@ def fmt(delta):
     return f"{minutes // 60}h {minutes % 60:02d}m"
 
 
+def toggle_map_state(state):
+    key = f"show_{state}"
+    st.session_state[key] = not st.session_state.get(key, True)
+
+
 st.set_page_config(page_title="HarborWatch", page_icon=":material/anchor:", layout="wide")
 st.title("HarborWatch: Port of Genoa")
 
@@ -141,19 +146,26 @@ def dashboard():
     # phone (columns would stack them one per row, a whole screen before the map).
     with st.container(horizontal=True, key="cards"):
         for state in LABELS:
-            # The keyed container lets state_card_css() paint the card in its state's map color.
             with st.container(key=f"state-{state}"):
+                visible = st.session_state.get(f"show_{state}", True)
                 st.metric(LABELS[state], int(counts.get(state, 0)), border=True, icon=ICONS[state])
+                action = f"{'Hide' if visible else 'Show'} {LABELS[state].lower()} on map"
+                st.button(action, key=f"map-{state}", icon=":material/visibility:" if visible else ":material/visibility_off:",
+                          on_click=toggle_map_state, args=(state,), width="stretch")
         st.metric("Mean wait", fmt(anchored["wait"].mean()) if len(anchored) else "-",
                   border=True, icon=":material/hourglass_top:",
                   help="Mean wait of the vessels at anchor now." + (
                       f" {unseen} of {len(anchored)} arrived before we saw them: the real mean is longer." if unseen else ""))
     st.html(state_card_css())
 
+    visible_states = [s for s in LABELS if st.session_state.get(f"show_{s}", True)]
+    mapped = df[df["state"].isin(visible_states)]
     left, right = st.columns([2, 1], gap="medium")
     with left:
-        st.pydeck_chart(port_map(df, recent_tracks() if show_tracks else ([], {})), height=560)
-        st.caption(legend(df) + f" · dashed lines: last {config.TRACK_HOURS} h · circles: berth areas · "
+        st.pydeck_chart(port_map(mapped, recent_tracks() if show_tracks else ([], {})), height=560)
+        if not visible_states:
+            st.caption("All vessel states hidden. Select a card to show vessels.")
+        st.caption(legend(mapped) + f" · dashed lines: last {config.TRACK_HOURS} h · circles: berth areas · "
                    "hover for details", unsafe_allow_html=True)
     with right:
         st.subheader("Waiting at anchor")
@@ -343,13 +355,26 @@ def diagnostics_panel(atlas_ok, age):
 
 
 def state_card_css():
-    """Tie each state card to the map: accent line and icon in the state's dot color."""
+    """State colors and visibility controls for the map cards."""
     c = colors()
-    # Cards share the row equally and wrap two by two below ~4 x 170 px.
-    return "<style>.st-key-cards > div {flex: 1 1 170px; min-width: 150px;}" + "".join(
-        f".st-key-state-{s} [data-testid=stMetric] {{box-shadow: inset 0 3px 0 {c[s]};}}"
-        f".st-key-state-{s} [data-testid=stMetricIcon] {{color: {c[s]};}}"
-        for s in LABELS) + "</style>"
+    css = "<style>.st-key-cards > div {flex: 1 1 170px; min-width: 150px;}"
+    for s in LABELS:
+        card = f".st-key-state-{s}"
+        visible = st.session_state.get(f"show_{s}", True)
+        css += (
+            f"{card} {{position: relative;}}"
+            f"{card} [data-testid=stMetric] {{box-shadow: inset 0 3px 0 {c[s] if visible else 'transparent'};"
+            f"opacity: {1 if visible else 0.45}; padding-right: 48px;}}"
+            f"{card} [data-testid=stMetricIcon] {{color: {c[s]};}}"
+            f".st-key-map-{s} {{position: absolute; inset: 0; z-index: 1;}}"
+            f"{card} [data-testid=stButton] {{height: 100%;}}"
+            f"{card} button {{height: 100%; border: none; background: transparent;"
+            f"color: {c[s] if visible else 'inherit'}; justify-content: flex-end; align-items: flex-start; padding: 16px;}}"
+            f"{card} button [data-testid=stIconMaterial] {{position: absolute; right: 16px; top: 16px;}}"
+            f"{card} button:hover {{background: {c[s]}14; color: {c[s]};}}"
+            f"{card} button p {{position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);}}"
+        )
+    return css + "</style>"
 
 
 def legend(df):
