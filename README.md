@@ -58,7 +58,7 @@ cp .env.example .env           # then fill in AISSTREAM_API_KEY and MONGODB_URI
 pytest
 ```
 
-The suite runs in under a second, without network or database, on every push (GitHub Actions, Python 3.12 and 3.14). It covers message validation, classification thresholds and the coastline distance, the berth data, the optimizer (expected optima checked by brute force on small cases), berth occupancy, stay measurement, the hourly history behind the charts and the map icons. The tests are written by a separate agent from the specification alone, without reading the implementation; the code adapts to them. `tests/check_stays_pipeline.py` checks against a real MongoDB that the aggregation finding the stays agrees with the tested Python definition.
+The suite runs in under a second, without network or database, on every push (GitHub Actions, Python 3.12 and 3.14). It covers message validation, classification thresholds and the coastline distance, the berth data, the optimizer (expected optima checked by brute force on small cases), berth occupancy, stay measurement, the hourly history behind the charts and the map icons. The tests are written by a separate agent from the specification alone, without reading the implementation; the code adapts to them. Three integration scripts in `tests/integration/` run by hand against a real MongoDB, on a throwaway collection: the aggregation finding the stays must agree with the tested Python definition, the hourly congestion aggregation with a count done in Python, and the pipeline update that tracks when each vessel's state began must handle new vessels, state changes and gaps.
 
 ## Known limitations
 
@@ -73,6 +73,7 @@ The suite runs in under a second, without network or database, on every push (Gi
 src/        ingest.py, classify.py, optimize.py, history.py, app.py, config.py
 data/       coastline.json (OSM coastline), berths.json (berths of the port)
 tests/      one test file per module with non-trivial logic, plus recorded AIS messages
+  integration/  checks against a real MongoDB, run by hand
 run.sh      ingestion + dashboard, or the dashboard alone
 ```
 

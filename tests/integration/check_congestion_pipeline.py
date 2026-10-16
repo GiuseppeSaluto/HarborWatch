@@ -20,8 +20,8 @@ reference. The throwaway collection is always dropped at the end; the real
 
 Usage (from the repo root):
 
-    HARBORWATCH_CHECK_URI="mongodb+srv://..." python tests/check_congestion_pipeline.py
-    python tests/check_congestion_pipeline.py --rounds 20 --vessels 40 --seed 7
+    HARBORWATCH_CHECK_URI="mongodb+srv://..." python tests/integration/check_congestion_pipeline.py
+    python tests/integration/check_congestion_pipeline.py --rounds 20 --vessels 40 --seed 7
 
 Environment:
     HARBORWATCH_CHECK_URI  connection string (falls back to MONGODB_URI)
@@ -47,7 +47,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import history  # noqa: E402
 

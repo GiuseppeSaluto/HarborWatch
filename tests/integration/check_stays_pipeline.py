@@ -11,8 +11,8 @@ collection is never read or written.
 
 Usage (from the repo root):
 
-    HARBORWATCH_CHECK_URI="mongodb+srv://..." python tests/check_stays_pipeline.py
-    python tests/check_stays_pipeline.py --rounds 20 --vessels 30 --seed 7
+    HARBORWATCH_CHECK_URI="mongodb+srv://..." python tests/integration/check_stays_pipeline.py
+    python tests/integration/check_stays_pipeline.py --rounds 20 --vessels 30 --seed 7
 
 Environment:
     HARBORWATCH_CHECK_URI  connection string (falls back to MONGODB_URI)
@@ -38,7 +38,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import config  # noqa: E402
 import history  # noqa: E402
