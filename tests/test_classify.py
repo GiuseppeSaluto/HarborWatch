@@ -150,42 +150,6 @@ def test_moored_scale_and_anchored_scale_fall_on_either_side_of_quay_threshold()
 
 
 # --- ship_category --------------------------------------------------------------------
-# Named in the spec: classify.ship_category(ship_type) groups AIS type codes.
-# AIS codes: 60-69 passenger, 70-79 cargo, 80-89 tanker, 0 = not available.
-
-
-@pytest.mark.parametrize("code", [70, 71, 74, 79])
-def test_cargo_codes(code):
-    assert classify.ship_category(code) == "cargo"
-
-
-@pytest.mark.parametrize("code", [80, 84, 89])
-def test_tanker_codes(code):
-    assert classify.ship_category(code) == "tanker"
-
-
-@pytest.mark.parametrize("code", [60, 69])
-def test_passenger_codes(code):
-    assert classify.ship_category(code) == "passenger"
-
-
-@pytest.mark.parametrize("code", [52, 50, 37, 36, 30, 90])
-def test_port_life_is_not_commercial(code):
-    # Tugs (52), pilots (50), pleasure craft / yachts (37), sailing (36),
-    # fishing (30), other (90) are not congestion.
-    assert classify.ship_category(code) not in {"cargo", "tanker", "passenger"}
-
-
-def test_type_zero_is_unknown():
-    # Spec section 12 speaks of "navi `unknown`" for AIS type 0.
-    assert classify.ship_category(0) == "unknown"
-
-
-def test_missing_type_is_unknown():
-    # Assumption: a missing ship_type (None, static data not yet received) is
-    # treated like type 0.
-    assert classify.ship_category(None) == "unknown"
-
 
 def test_ship_category_every_range_with_both_edges_and_the_code_just_outside():
     # Spec section 13: closed ranges; both edges belong to the category, the
