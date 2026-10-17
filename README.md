@@ -8,7 +8,7 @@ Real-time port congestion monitor and berth allocation optimizer for the Port of
 
 ## What it does
 
-- **Monitors the port live.** Every vessel in the port area is classified as *at berth*, *at anchor* or *underway*, and the dashboard shows the counts, a map where each vessel's icon tells its type (container ship, tanker, ferry, tug, sailing boat) and its color the state, with the paths of the vessels that moved in the last 3 hours, and how long commercial vessels have been waiting at anchor.
+- **Monitors the port live.** Every vessel in the port area is classified as *at berth*, *at anchor* or *underway*, and the dashboard shows the counts, a map where each vessel's icon tells its type (container ship, tanker, ferry, tug, sailing boat) and its color the state, with the paths of the vessels that moved in the last 3 hours, and how long commercial vessels have been waiting at anchor. Each state card can hide or show its vessels on the map.
 - **Tracks congestion over time.** An hourly series of commercial vessels at anchor, with gaps where no data was collected rather than misleading zeros.
 - **Proposes a berth plan.** A constraint-programming model (OR-Tools CP-SAT) assigns every waiting vessel a compatible berth and a mooring time, minimizing the total wait, around the vessels already moored.
 - **Says how far to trust itself.** A status badge and panel show data freshness, continuous collection time, which stay durations are measured and which are still defaults, and database usage. Vessels the plan cannot place are listed, not dropped.
@@ -18,9 +18,9 @@ Hovering the map shows each vessel's name, type, length, state and speed, and ea
 
 ![Map tooltip on a tanker waiting at anchor](docs/map-tooltip.png)
 
-Below the map, the vessels waiting at anchor and the proposed berth plan, with its table view opened:
+Below the map and the vessels waiting at anchor, the proposed berth plan, with its table view opened:
 
-![Vessels at anchor, proposed berth plan as a Gantt chart, and its table view](docs/berth-plan.png)
+![Proposed berth plan as a Gantt chart, and its table view](docs/berth-plan.png)
 
 ## How it works
 
@@ -35,7 +35,7 @@ AISStream (WebSocket) ──> ingest.py ──> MongoDB Atlas ──> app.py (St
 
 - **Ingestion** (`src/ingest.py`): an asyncio client subscribes to the port's bounding box on [AISStream](https://aisstream.io), validates every message (AIS uses sentinel values such as latitude 91 for "not available") and writes to MongoDB with PyMongo's async API. It reconnects on its own and flushes its buffers on shutdown.
 - **Classification** (`src/classify.py`): a vessel is *underway* above 0.5 knots; otherwise it is *at berth* when within 100 m of the coastline, whose OpenStreetMap trace follows the quay edges in Genoa, and *at anchor* when further out. The AIS ship type separates commercial traffic (cargo, tanker, passenger) from tugs, pilot boats and yachts: during the 2026 Genoa Boat Show dozens of 50-90 m superyachts were moored in port, and length alone could not tell them from cargo ships.
-- **Storage under free-tier limits**: MongoDB Atlas M0 allows 512 MB and 100 operations per second. Positions are sampled to one per vessel per minute, written in batches every 10 seconds, and expire after 7 days through a TTL index. The ingestion logs the used and projected storage (about 70 MB at steady state, measured).
+- **Storage under free-tier limits**: MongoDB Atlas M0 allows 512 MB and 100 operations per second. Positions are sampled to one per vessel per minute, written in batches every 10 seconds, and expire after 7 days through a TTL index. The ingestion logs the used and projected storage (about 57 MB at steady state, measured).
 - **State history**: each vessel's current state is upserted with the time it began, computed inside MongoDB with a pipeline update so that it survives restarts. After a gap in the data the start time is reset and flagged as "not seen", instead of silently counting the gap as waiting time.
 - **Berth plan** (`src/optimize.py`): berths come from `data/berths.json`, 29 berths with their length and accepted vessel categories, each marked as official or observed. Each waiting vessel gets an optional interval on every compatible berth; `NoOverlap` per berth keeps one vessel at a time, including the vessels already moored. Expected stays are measured from complete stays in the history once a category has enough of them, seen in a continuous collection window at least twice its default stay (in a few-hour window only short stays can be seen from start to end), and fall back to per-category defaults until then.
 
