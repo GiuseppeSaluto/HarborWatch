@@ -72,6 +72,7 @@ The suite runs in under a second, without network or database, on every push (Gi
 ```
 src/        ingest.py, classify.py, optimize.py, history.py, app.py, config.py
 data/       coastline.json (OSM coastline), berths.json (berths of the port)
+  sample/   one week of collected data, readable without a database
 tests/      one test file per module with non-trivial logic, plus recorded AIS messages
   integration/  checks against a real MongoDB, run by hand
 run.sh      ingestion + dashboard, or the dashboard alone
@@ -80,6 +81,7 @@ run.sh      ingestion + dashboard, or the dashboard alone
 ## Data
 
 - Vessel positions: [AISStream](https://aisstream.io) live AIS feed.
+- `data/sample/` holds one week of collected data (hourly congestion, stays, vessels, and one day of positions) for demonstration, non-commercial use; see its [README](data/sample/README.md).
 - `data/coastline.json` is the OpenStreetMap coastline around the port, © OpenStreetMap contributors, available under the [ODbL](https://www.openstreetmap.org/copyright).
 - `data/berths.json` combines quay lengths published by the [Port Authority of Genoa](https://www.portsofgenoa.com) with values observed in the collected data, as noted in each entry.
 

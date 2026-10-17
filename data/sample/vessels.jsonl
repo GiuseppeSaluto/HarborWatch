@@ -1,0 +1,221 @@
+{"mmsi": 205703000, "name": "GREEN ZEEBRUGGE", "ship_type": 81, "category": "tanker", "length": 108, "width": 18}
+{"mmsi": 210515000, "name": "SOLVIK", "ship_type": 70, "category": "cargo", "length": 90, "width": 13}
+{"mmsi": 212028000, "name": "ANGELO B", "ship_type": 90, "category": "other", "length": 74, "width": 14}
+{"mmsi": 212585000, "name": "GIOACCHINO BACHETO", "ship_type": 33, "category": "service", "length": 66, "width": 12}
+{"mmsi": 215000957, "name": "MAGIC BLUE", "ship_type": 36, "category": "pleasure", "length": 30, "width": 8}
+{"mmsi": 215063000, "name": "VALSESIA", "ship_type": 89, "category": "tanker", "length": 184, "width": 28}
+{"mmsi": 215086000, "name": "DEFNE BAYRAK", "ship_type": 80, "category": "tanker", "length": 110, "width": 16}
+{"mmsi": 215127000, "name": "CMA CGM CENDRILLON", "ship_type": 71, "category": "cargo", "length": 334, "width": 43}
+{"mmsi": 215177000, "name": "MARIO A", "ship_type": 71, "category": "cargo", "length": 183, "width": 25}
+{"mmsi": 215325000, "name": "MSC GRANDIOSA", "ship_type": 60, "category": "passenger", "length": 332, "width": 52}
+{"mmsi": 215435000, "name": "VANADIS", "ship_type": 37, "category": "pleasure", "length": 32, "width": 7}
+{"mmsi": 215548000, "name": "FABIO DUO'", "ship_type": 70, "category": "cargo", "length": 80, "width": 16}
+{"mmsi": 215831000, "name": "MAXIMILIAN MMIV", "ship_type": 37, "category": "pleasure", "length": 44, "width": 9}
+{"mmsi": 215940000, "name": "NEPTUNE KOPER", "ship_type": 70, "category": "cargo", "length": 197, "width": 30}
+{"mmsi": 228376800, "name": "JIF HELIOS", "ship_type": 52, "category": "service", "length": 26, "width": 11}
+{"mmsi": 228495900, "name": "JIF LEVIATHAN", "ship_type": 50, "category": "service", "length": 12, "width": 2}
+{"mmsi": 229000469, "name": "INVADER", "ship_type": 36, "category": "pleasure", "length": 49, "width": 7}
+{"mmsi": 229091000, "name": "DESAMIS_B", "ship_type": 37, "category": "pleasure", "length": 40, "width": 12}
+{"mmsi": 229092000, "name": "SOUTH PAW C", "ship_type": null, "category": "unknown", "length": 34, "width": 7}
+{"mmsi": 229296000, "name": "POL STELLA", "ship_type": 71, "category": "cargo", "length": 193, "width": 26}
+{"mmsi": 229372000, "name": "RONIN", "ship_type": 37, "category": "pleasure", "length": 60, "width": 10}
+{"mmsi": 229456000, "name": "AMBER BEE", "ship_type": 80, "category": "tanker", "length": 176, "width": 31}
+{"mmsi": 232027801, "name": "B3", "ship_type": 37, "category": "pleasure", "length": 57, "width": 9}
+{"mmsi": 232035982, "name": "WILAMINA", "ship_type": 37, "category": "pleasure", "length": 45, "width": 7}
+{"mmsi": 232039136, "name": "IRYNA II", "ship_type": 37, "category": "pleasure", "length": 50, "width": 9}
+{"mmsi": 232054232, "name": "ALVIA", "ship_type": 37, "category": "pleasure", "length": 76, "width": 14}
+{"mmsi": 232130000, "name": "KORU", "ship_type": 37, "category": "pleasure", "length": 46, "width": 8}
+{"mmsi": 235030755, "name": "NO6-TEXEL", "ship_type": 36, "category": "pleasure", "length": 30, "width": 6}
+{"mmsi": 235070865, "name": "SILVER ANGEL", "ship_type": 37, "category": "pleasure", "length": 65, "width": 12}
+{"mmsi": 235085866, "name": "BLANCA", "ship_type": 97, "category": "other", "length": 50, "width": 10}
+{"mmsi": 236509000, "name": "MITTELPLATE", "ship_type": 70, "category": "cargo", "length": 86, "width": 13}
+{"mmsi": 240630000, "name": "SEAVEN STAR", "ship_type": 70, "category": "cargo", "length": 112, "width": 16}
+{"mmsi": 240657000, "name": "AEGEAN NOBILITY", "ship_type": 80, "category": "tanker", "length": 249, "width": 44}
+{"mmsi": 246110000, "name": "MYRTE", "ship_type": 79, "category": "cargo", "length": 122, "width": 16}
+{"mmsi": 246808000, "name": "JIF OLOUS", "ship_type": 52, "category": "service", "length": 26, "width": 11}
+{"mmsi": 247013400, "name": "MEGA EXPRESS", "ship_type": 60, "category": "passenger", "length": 176, "width": 25}
+{"mmsi": 247015400, "name": "MOBY WONDER", "ship_type": 60, "category": "passenger", "length": 175, "width": 28}
+{"mmsi": 247049490, "name": "AQUILA PESCATRICE", "ship_type": 30, "category": "service", "length": 18, "width": 3}
+{"mmsi": 247057100, "name": "GNV ALTAIR", "ship_type": 60, "category": "passenger", "length": 214, "width": 26}
+{"mmsi": 247059400, "name": "GIANEMILIO C", "ship_type": 52, "category": "service", "length": 32, "width": 9}
+{"mmsi": 247061700, "name": "URSA MAJOR", "ship_type": 70, "category": "cargo", "length": 205, "width": 28}
+{"mmsi": 247067650, "name": "PIROPO", "ship_type": 37, "category": "pleasure", "length": 56, "width": 11}
+{"mmsi": 247075700, "name": "CORSARA", "ship_type": 69, "category": "passenger", "length": 27, "width": 6}
+{"mmsi": 247083700, "name": "LA SUPREMA", "ship_type": 69, "category": "passenger", "length": 211, "width": 30}
+{"mmsi": 247106500, "name": "GNV SIRIO", "ship_type": 69, "category": "passenger", "length": 214, "width": 27}
+{"mmsi": 247110900, "name": "PORTO VADO VI", "ship_type": 52, "category": "service", "length": 17, "width": 5}
+{"mmsi": 247122900, "name": "VF 1082", "ship_type": 55, "category": "service", "length": 15, "width": 4}
+{"mmsi": 247130800, "name": "SVEZIA", "ship_type": 52, "category": "service", "length": 27, "width": 9}
+{"mmsi": 247132400, "name": "MOBY AKI", "ship_type": 60, "category": "passenger", "length": 175, "width": 28}
+{"mmsi": 247159400, "name": "DIONEA", "ship_type": 99, "category": "other", "length": 54, "width": 8}
+{"mmsi": 247175600, "name": "VF R06", "ship_type": 55, "category": "service", "length": 13, "width": 4}
+{"mmsi": 247177600, "name": "CITTA DI CAMOGLI", "ship_type": 60, "category": "passenger", "length": null, "width": null}
+{"mmsi": 247180900, "name": "OLANDA", "ship_type": 52, "category": "service", "length": 27, "width": 9}
+{"mmsi": 247186700, "name": "MOBY TOMMY", "ship_type": 69, "category": "passenger", "length": 210, "width": 25}
+{"mmsi": 247209800, "name": "RODI JET", "ship_type": 60, "category": "passenger", "length": 30, "width": 7}
+{"mmsi": 247220900, "name": "VF 1088", "ship_type": 55, "category": "service", "length": 15, "width": 4}
+{"mmsi": 247225100, "name": "NEPTUNUS", "ship_type": 60, "category": "passenger", "length": 20, "width": 4}
+{"mmsi": 247235900, "name": "SAN GIUSEPPE PRIMO", "ship_type": 33, "category": "service", "length": 35, "width": 16}
+{"mmsi": 247237700, "name": "GNV AZZURRA", "ship_type": 60, "category": "passenger", "length": 169, "width": 27}
+{"mmsi": 247245100, "name": "NINO I", "ship_type": 70, "category": "cargo", "length": 36, "width": 20}
+{"mmsi": 247270900, "name": "SAN FRANCESCO", "ship_type": 89, "category": "tanker", "length": 74, "width": 14}
+{"mmsi": 247277900, "name": "REDEEMER", "ship_type": 90, "category": "other", "length": 43, "width": 15}
+{"mmsi": 247287200, "name": "BREZZAMARE", "ship_type": 80, "category": "tanker", "length": 85, "width": 13}
+{"mmsi": 247293800, "name": "EUROCARGO GENOVA", "ship_type": 71, "category": "cargo", "length": 200, "width": 26}
+{"mmsi": 247297200, "name": "EUROCARGO VENEZIA", "ship_type": 70, "category": "cargo", "length": 200, "width": 26}
+{"mmsi": 247299200, "name": "NORVEGIA", "ship_type": 52, "category": "service", "length": 25, "width": 12}
+{"mmsi": 247299700, "name": "SPAGNA", "ship_type": 52, "category": "service", "length": 25, "width": 12}
+{"mmsi": 247301200, "name": "G.LORIS", "ship_type": 99, "category": "other", "length": 40, "width": 14}
+{"mmsi": 247304200, "name": "GRANDE TOGO", "ship_type": 70, "category": "cargo", "length": 211, "width": 32}
+{"mmsi": 247317800, "name": "SAN GENNARO PRIMO", "ship_type": 90, "category": "other", "length": 46, "width": 23}
+{"mmsi": 247325800, "name": "ANNAMARIA Z", "ship_type": 90, "category": "other", "length": 80, "width": 15}
+{"mmsi": 247335800, "name": "MALTA", "ship_type": 52, "category": "service", "length": 24, "width": 11}
+{"mmsi": 247336500, "name": "COLUMBIA", "ship_type": 52, "category": "service", "length": 24, "width": 8}
+{"mmsi": 247336600, "name": "DANIMARCA", "ship_type": 52, "category": "service", "length": 29, "width": 13}
+{"mmsi": 247337400, "name": "CAVALIER SERGIO M.", "ship_type": 79, "category": "cargo", "length": 55, "width": 9}
+{"mmsi": 247338200, "name": "PORTOFINO", "ship_type": 52, "category": "service", "length": 42, "width": 13}
+{"mmsi": 247338600, "name": "TECNE", "ship_type": 89, "category": "tanker", "length": 68, "width": 14}
+{"mmsi": 247343800, "name": "GERMANIA", "ship_type": 52, "category": "service", "length": 29, "width": 13}
+{"mmsi": 247362600, "name": "RHAPSODY", "ship_type": 69, "category": "passenger", "length": 172, "width": 30}
+{"mmsi": 247380600, "name": "FILIPPO", "ship_type": 70, "category": "cargo", "length": 72, "width": 20}
+{"mmsi": 247382900, "name": "ITALIA", "ship_type": 52, "category": "service", "length": 25, "width": 12}
+{"mmsi": 247383400, "name": "ECO BARCELONA", "ship_type": 74, "category": "cargo", "length": 238, "width": 34}
+{"mmsi": 247385700, "name": "PASCAL LOTA", "ship_type": 60, "category": "passenger", "length": 177, "width": 27}
+{"mmsi": 247386070, "name": "NO RUSH1", "ship_type": 37, "category": "pleasure", "length": 50, "width": 9}
+{"mmsi": 247388500, "name": "PALMIRO Z", "ship_type": 70, "category": "cargo", "length": 68, "width": 10}
+{"mmsi": 247388800, "name": "ROSA DEI VENTI", "ship_type": 70, "category": "cargo", "length": 180, "width": 26}
+{"mmsi": 247428100, "name": "FORTE", "ship_type": 52, "category": "service", "length": 11, "width": 3}
+{"mmsi": 247431200, "name": "COSTA TOSCANA", "ship_type": 60, "category": "passenger", "length": 337, "width": 58}
+{"mmsi": 247453600, "name": "ECO NAPOLI", "ship_type": 70, "category": "cargo", "length": 238, "width": 34}
+{"mmsi": 247483900, "name": "JOLLY ROSA", "ship_type": 70, "category": "cargo", "length": 260, "width": 32}
+{"mmsi": 247486400, "name": "GNV POLARIS", "ship_type": 69, "category": "passenger", "length": 218, "width": 30}
+{"mmsi": 247488500, "name": "GNV ORION", "ship_type": 60, "category": "passenger", "length": 218, "width": 30}
+{"mmsi": 247529200, "name": "GNV VIRGO", "ship_type": 60, "category": "passenger", "length": 218, "width": 30}
+{"mmsi": 247530300, "name": "GNV AURORA", "ship_type": 60, "category": "passenger", "length": 218, "width": 30}
+{"mmsi": 247539300, "name": "VB INSIGNIA", "ship_type": 52, "category": "service", "length": 32, "width": 13}
+{"mmsi": 247579700, "name": "VB MARTE", "ship_type": 52, "category": "service", "length": 28, "width": 13}
+{"mmsi": 247737000, "name": "CP 830", "ship_type": 51, "category": "service", "length": 13, "width": 4}
+{"mmsi": 248025000, "name": "CANVAS", "ship_type": 37, "category": "pleasure", "length": 37, "width": 7}
+{"mmsi": 248141000, "name": "MARIA VITTORIA Z", "ship_type": 33, "category": "service", "length": 80, "width": 19}
+{"mmsi": 248393000, "name": "PURE", "ship_type": 90, "category": "other", "length": 90, "width": 14}
+{"mmsi": 248597000, "name": "L'OURSIN", "ship_type": 37, "category": "pleasure", "length": 50, "width": 9}
+{"mmsi": 248618000, "name": "FALCO MOSCATA", "ship_type": 37, "category": "pleasure", "length": 48, "width": 10}
+{"mmsi": 248663000, "name": "ZEFIRA", "ship_type": 37, "category": "pleasure", "length": 50, "width": 10}
+{"mmsi": 248717000, "name": "MSC SEAVIEW", "ship_type": 60, "category": "passenger", "length": 323, "width": 44}
+{"mmsi": 248953000, "name": "SEA CLOUD II", "ship_type": 60, "category": "passenger", "length": 117, "width": 16}
+{"mmsi": 249319000, "name": "ADAM ASNYK", "ship_type": 70, "category": "cargo", "length": 200, "width": 28}
+{"mmsi": 249421000, "name": "HITRA", "ship_type": 89, "category": "tanker", "length": 107, "width": 16}
+{"mmsi": 249595000, "name": "KEA X", "ship_type": 37, "category": "pleasure", "length": 40, "width": 8}
+{"mmsi": 249698000, "name": "INS LAND", "ship_type": 37, "category": "pleasure", "length": 36, "width": 8}
+{"mmsi": 249929000, "name": "BIANCA II", "ship_type": 36, "category": "pleasure", "length": 25, "width": 6}
+{"mmsi": 255803480, "name": "MSC RIDA VIII", "ship_type": 70, "category": "cargo", "length": 340, "width": 46}
+{"mmsi": 255805480, "name": "LIBERTAS H", "ship_type": 72, "category": "cargo", "length": 128, "width": 20}
+{"mmsi": 255805606, "name": "ELISABETH RUSS", "ship_type": 79, "category": "cargo", "length": 153, "width": 20}
+{"mmsi": 255805834, "name": "CAROLINE RUSS", "ship_type": 79, "category": "cargo", "length": 154, "width": 21}
+{"mmsi": 255805929, "name": "MSC MICHELA", "ship_type": 71, "category": "cargo", "length": 300, "width": 48}
+{"mmsi": 255806391, "name": "SIDER ORION", "ship_type": 70, "category": "cargo", "length": 110, "width": 16}
+{"mmsi": 255912960, "name": "DIONE STAR", "ship_type": 37, "category": "pleasure", "length": 42, "width": 6}
+{"mmsi": 255915590, "name": "JUDITH BORCHARD", "ship_type": 71, "category": "cargo", "length": 150, "width": 27}
+{"mmsi": 255915744, "name": "MASTERY D", "ship_type": 70, "category": "cargo", "length": 155, "width": 21}
+{"mmsi": 255915869, "name": "STEEL", "ship_type": 37, "category": "pleasure", "length": 54, "width": 10}
+{"mmsi": 255916276, "name": "CAPE SKAGEN", "ship_type": null, "category": "unknown", "length": 188, "width": 32}
+{"mmsi": 255916284, "name": "WILHELMINE ESSBERGER", "ship_type": 82, "category": "tanker", "length": 115, "width": 19}
+{"mmsi": 255916531, "name": "SIDER DONUT", "ship_type": 70, "category": "cargo", "length": 120, "width": 20}
+{"mmsi": 255916593, "name": "SIDER ABIDJAN", "ship_type": 70, "category": "cargo", "length": 180, "width": 30}
+{"mmsi": 255917305, "name": "SIDER REBECCA", "ship_type": null, "category": "unknown", "length": 96, "width": 13}
+{"mmsi": 256001784, "name": "IRAMA", "ship_type": 99, "category": "other", "length": 42, "width": 10}
+{"mmsi": 256003619, "name": "VOE JARL", "ship_type": 52, "category": "service", "length": 26, "width": 12}
+{"mmsi": 256004628, "name": "OFFSHORE PROGRESS", "ship_type": 40, "category": "passenger", "length": 16, "width": 6}
+{"mmsi": 256022000, "name": "CMA CGM ABIDJAN", "ship_type": 74, "category": "cargo", "length": 175, "width": 27}
+{"mmsi": 256060000, "name": "LE VERSEAU", "ship_type": 37, "category": "pleasure", "length": 40, "width": 10}
+{"mmsi": 256070000, "name": "MSC WORLD EUROPA", "ship_type": 60, "category": "passenger", "length": 333, "width": 54}
+{"mmsi": 256325000, "name": "SONGA POLARIS", "ship_type": 82, "category": "tanker", "length": 170, "width": 26}
+{"mmsi": 256515000, "name": "HISTRIA GEMMA", "ship_type": 80, "category": "tanker", "length": 179, "width": 32}
+{"mmsi": 256593000, "name": "MR. T", "ship_type": 37, "category": "pleasure", "length": 46, "width": 8}
+{"mmsi": 256790000, "name": "ETERNAL SPARK", "ship_type": 37, "category": "pleasure", "length": 49, "width": 9}
+{"mmsi": 256799000, "name": "FRIENDSHIP", "ship_type": 37, "category": "pleasure", "length": 52, "width": 10}
+{"mmsi": 256816000, "name": "SERENISSIMA I", "ship_type": 37, "category": "pleasure", "length": 47, "width": 9}
+{"mmsi": 256922000, "name": "PAPA JOE 1", "ship_type": 37, "category": "pleasure", "length": 44, "width": 8}
+{"mmsi": 310034000, "name": "MMM", "ship_type": 37, "category": "pleasure", "length": 50, "width": 9}
+{"mmsi": 310547000, "name": "NAFISA", "ship_type": 37, "category": "pleasure", "length": 49, "width": 9}
+{"mmsi": 310781000, "name": "TOUTE SWEET", "ship_type": 37, "category": "pleasure", "length": 50, "width": 10}
+{"mmsi": 310826000, "name": "GLASGOW EXPRESS", "ship_type": 70, "category": "cargo", "length": 281, "width": 32}
+{"mmsi": 310841000, "name": "SUN PRINCESS", "ship_type": 60, "category": "passenger", "length": 345, "width": 48}
+{"mmsi": 319015300, "name": "BARAKA", "ship_type": 90, "category": "other", "length": 59, "width": 10}
+{"mmsi": 319032000, "name": "VOLARE", "ship_type": 37, "category": "pleasure", "length": 44, "width": 9}
+{"mmsi": 319035300, "name": "RUSH", "ship_type": 37, "category": "pleasure", "length": 50, "width": 10}
+{"mmsi": 319041800, "name": "DEEP BLUE II", "ship_type": 90, "category": "other", "length": 44, "width": 9}
+{"mmsi": 319048800, "name": "NAUTILUS", "ship_type": 37, "category": "pleasure", "length": 73, "width": 14}
+{"mmsi": 319088700, "name": "STELLA MARIS", "ship_type": 37, "category": "pleasure", "length": 72, "width": 12}
+{"mmsi": 319089900, "name": "ACALA", "ship_type": 37, "category": "pleasure", "length": 31, "width": 8}
+{"mmsi": 319112000, "name": "RENEGADE", "ship_type": 37, "category": "pleasure", "length": 49, "width": 9}
+{"mmsi": 319133200, "name": "HOLDIN' MY OWN", "ship_type": 37, "category": "pleasure", "length": 55, "width": 9}
+{"mmsi": 319162400, "name": "AMO", "ship_type": 37, "category": "pleasure", "length": 47, "width": 7}
+{"mmsi": 319169800, "name": "HOLIDAY", "ship_type": 37, "category": "pleasure", "length": 43, "width": 9}
+{"mmsi": 319184300, "name": "LEGEND", "ship_type": null, "category": "unknown", "length": 38, "width": 8}
+{"mmsi": 319187300, "name": "GO", "ship_type": 37, "category": "pleasure", "length": 45, "width": 8}
+{"mmsi": 319187600, "name": "LADY A", "ship_type": 37, "category": "pleasure", "length": 65, "width": 10}
+{"mmsi": 319207900, "name": "STELLA MI", "ship_type": 37, "category": "pleasure", "length": 60, "width": 11}
+{"mmsi": 319213000, "name": "CLEOPATRA", "ship_type": 37, "category": "pleasure", "length": 57, "width": 10}
+{"mmsi": 319222700, "name": "LUSINE", "ship_type": 37, "category": "pleasure", "length": 60, "width": 9}
+{"mmsi": 319226800, "name": "COME TOGETHER", "ship_type": 37, "category": "pleasure", "length": 60, "width": 10}
+{"mmsi": 319230400, "name": "SAKURA", "ship_type": 37, "category": "pleasure", "length": 83, "width": 13}
+{"mmsi": 319252100, "name": "NEVER SAY NEVER AGAI", "ship_type": 37, "category": "pleasure", "length": 37, "width": 9}
+{"mmsi": 319252600, "name": "SEALION", "ship_type": 37, "category": "pleasure", "length": 62, "width": 12}
+{"mmsi": 319253600, "name": "STEFANIA", "ship_type": 37, "category": "pleasure", "length": 41, "width": 8}
+{"mmsi": 319307600, "name": "CABO", "ship_type": 37, "category": "pleasure", "length": 43, "width": 8}
+{"mmsi": 319320700, "name": "FANTASY", "ship_type": 37, "category": "pleasure", "length": 59, "width": 11}
+{"mmsi": 319331400, "name": "SIMENA", "ship_type": 36, "category": "pleasure", "length": 100, "width": 20}
+{"mmsi": 319344300, "name": "ANGELIQUE", "ship_type": 37, "category": "pleasure", "length": 88, "width": 14}
+{"mmsi": 319354600, "name": "OFF HIRE", "ship_type": 37, "category": "pleasure", "length": 42, "width": 8}
+{"mmsi": 319363100, "name": "LUMINA", "ship_type": 37, "category": "pleasure", "length": 44, "width": 8}
+{"mmsi": 319440000, "name": "NURJA", "ship_type": 37, "category": "pleasure", "length": 41, "width": 18}
+{"mmsi": 319574000, "name": "IL VAGABONDO", "ship_type": 37, "category": "pleasure", "length": 65, "width": 10}
+{"mmsi": 319634000, "name": "SILVER DREAM", "ship_type": 37, "category": "pleasure", "length": 44, "width": 8}
+{"mmsi": 319692000, "name": "S/Y METOLIUS", "ship_type": 37, "category": "pleasure", "length": 24, "width": 6}
+{"mmsi": 319883000, "name": "ARIELA", "ship_type": 37, "category": "pleasure", "length": 55, "width": 9}
+{"mmsi": 319915000, "name": "OLYMPUS", "ship_type": 37, "category": "pleasure", "length": 55, "width": 10}
+{"mmsi": 339926000, "name": "JOMAR", "ship_type": 37, "category": "pleasure", "length": 40, "width": 8}
+{"mmsi": 341478000, "name": "KINDA", "ship_type": 37, "category": "pleasure", "length": 49, "width": 9}
+{"mmsi": 351500000, "name": "LE PHARAON", "ship_type": 37, "category": "pleasure", "length": 60, "width": 9}
+{"mmsi": 352001367, "name": "MSC BARBADOS", "ship_type": 71, "category": "cargo", "length": 294, "width": 32}
+{"mmsi": 352004808, "name": "PIANOSA", "ship_type": 79, "category": "cargo", "length": 50, "width": 12}
+{"mmsi": 357627000, "name": "MSC OPERA", "ship_type": 69, "category": "passenger", "length": 275, "width": 32}
+{"mmsi": 357690000, "name": "DARNICE III", "ship_type": 37, "category": "pleasure", "length": 58, "width": 10}
+{"mmsi": 370497000, "name": "CHEMROAD POLARIS", "ship_type": 80, "category": "tanker", "length": 180, "width": 27}
+{"mmsi": 372497000, "name": "MSC ORCHESTRA", "ship_type": 60, "category": "passenger", "length": 294, "width": 32}
+{"mmsi": 378114475, "name": "SINGOLARE", "ship_type": 37, "category": "pleasure", "length": 44, "width": 8}
+{"mmsi": 378407000, "name": "CANOVA", "ship_type": 36, "category": "pleasure", "length": 43, "width": null}
+{"mmsi": 378409000, "name": "RR", "ship_type": 37, "category": "pleasure", "length": 45, "width": 9}
+{"mmsi": 470016000, "name": "DXB", "ship_type": 37, "category": "pleasure", "length": 35, "width": 7}
+{"mmsi": 477144300, "name": "SEAVOYAGER", "ship_type": 80, "category": "tanker", "length": 243, "width": 42}
+{"mmsi": 477636500, "name": "BOCHEM LONDON", "ship_type": 89, "category": "tanker", "length": 145, "width": 24}
+{"mmsi": 511100803, "name": "BLUE SKY", "ship_type": 99, "category": "other", "length": 92, "width": 24}
+{"mmsi": 518100219, "name": "BLEU DE NIMES", "ship_type": 69, "category": "passenger", "length": 72, "width": 12}
+{"mmsi": 518159080, "name": "STELLA FIERA II", "ship_type": 90, "category": "other", "length": 60, "width": 10}
+{"mmsi": 518999194, "name": "COSMICO", "ship_type": 37, "category": "pleasure", "length": 40, "width": 8}
+{"mmsi": 538005092, "name": "ARDMORE ENTERPRISE", "ship_type": 89, "category": "tanker", "length": 183, "width": 32}
+{"mmsi": 538007133, "name": "FRONT ANTARES", "ship_type": 80, "category": "tanker", "length": 251, "width": 44}
+{"mmsi": 538009683, "name": "VELOS AMBER", "ship_type": 80, "category": "tanker", "length": 228, "width": 32}
+{"mmsi": 538012363, "name": "SDERIA", "ship_type": 70, "category": "cargo", "length": 188, "width": 27}
+{"mmsi": 538012364, "name": "JINANAH", "ship_type": 70, "category": "cargo", "length": 187, "width": 26}
+{"mmsi": 538071066, "name": "QUEEN MIRI", "ship_type": 37, "category": "pleasure", "length": 92, "width": 14}
+{"mmsi": 538071251, "name": "LAURENTIA", "ship_type": 37, "category": "pleasure", "length": 55, "width": 10}
+{"mmsi": 538071291, "name": "LIONESS V", "ship_type": 37, "category": "pleasure", "length": 63, "width": 12}
+{"mmsi": 538071605, "name": "ELA", "ship_type": 37, "category": "pleasure", "length": 50, "width": 8}
+{"mmsi": 538071689, "name": "SAMIRA", "ship_type": 37, "category": "pleasure", "length": 55, "width": 10}
+{"mmsi": 538071840, "name": "SOLAFIDE", "ship_type": 37, "category": "pleasure", "length": 52, "width": 9}
+{"mmsi": 538072249, "name": "REDUCE", "ship_type": 37, "category": "pleasure", "length": 36, "width": 13}
+{"mmsi": 538072304, "name": "SILVERCAT", "ship_type": 10, "category": "other", "length": null, "width": null}
+{"mmsi": 538072435, "name": "FIFI", "ship_type": 37, "category": "pleasure", "length": 42, "width": 8}
+{"mmsi": 563183100, "name": "LEEVSTEN", "ship_type": 79, "category": "cargo", "length": 209, "width": 26}
+{"mmsi": 563255100, "name": "ESTELLE MAERSK", "ship_type": 71, "category": "cargo", "length": 399, "width": 56}
+{"mmsi": 565449000, "name": "MAERSK SERANGOON", "ship_type": 71, "category": "cargo", "length": 318, "width": 40}
+{"mmsi": 605086060, "name": "CIRTA", "ship_type": 70, "category": "cargo", "length": 172, "width": 24}
+{"mmsi": 636019061, "name": "CARMEL I", "ship_type": 79, "category": "cargo", "length": 259, "width": 32}
+{"mmsi": 636019868, "name": "ATETI", "ship_type": 71, "category": "cargo", "length": 298, "width": 40}
+{"mmsi": 636020454, "name": "MSC ERMINIA III", "ship_type": 70, "category": "cargo", "length": 211, "width": 29}
+{"mmsi": 636022178, "name": "ADRASTOS", "ship_type": 72, "category": "cargo", "length": 172, "width": 27}
+{"mmsi": 636023059, "name": "GSL EFFIE", "ship_type": 71, "category": "cargo", "length": 352, "width": 42}
+{"mmsi": 636023127, "name": "VENTO DI LEVANTE", "ship_type": 71, "category": "cargo", "length": 172, "width": 28}
+{"mmsi": 636092919, "name": "RDO CONCORD", "ship_type": 72, "category": "cargo", "length": 304, "width": 40}
