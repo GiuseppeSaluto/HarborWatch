@@ -18,6 +18,8 @@ pytest
 
 The test suite needs no API key, network or database.
 
+To explore real data without a database or API key, a week of collected data is in `data/sample/` (see its README). It is for analysis only: the dashboard and the ingestion still need AISStream and MongoDB.
+
 ## Code
 
 - Code, comments, names and commit messages in English.
@@ -25,7 +27,6 @@ The test suite needs no API key, network or database.
 - Prefer the simplest thing that works: the standard library before a new dependency, a few lines before a new abstraction.
 - Handle bad input explicitly, and let unexpected errors surface: a bug should be visible in the logs, not silently swallowed.
 - Mark a deliberate shortcut with a `Known limit:` comment that says what it does not handle and how it could be improved.
-- No emoji in the dashboard: use Material icons (`:material/...:`).
 
 ## Tests
 
