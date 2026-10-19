@@ -73,7 +73,7 @@ The suite runs in under a second, without network or database, on every push (Gi
 src/        ingest.py, classify.py, optimize.py, history.py, app.py, config.py
 data/       coastline.json (OSM coastline), berths.json (berths of the port)
   sample/   one week of collected data, readable without a database
-tests/      one test file per module with non-trivial logic, plus recorded AIS messages
+tests/      one test file per module with non-trivial logic
   integration/  checks against a real MongoDB, run by hand
 run.sh      ingestion + dashboard, or the dashboard alone
 ```
