@@ -45,6 +45,7 @@ import history  # noqa: E402
 import optimize  # noqa: E402
 
 STATES = ("underway", "anchored", "at_berth")
+STAY_KEYS = {"mmsi", "start", "end"}
 T0 = datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc)
 
 
@@ -113,15 +114,26 @@ def compare(collection, docs, label):
     if docs:
         collection.insert_many([dict(d) for d in docs])
     expected = {key(s) for s in optimize.measure_stays([dict(d) for d in docs])}
-    got = {key(s) for s in collection.aggregate(history.stays_pipeline(config.STALE_MINUTES))}
-    if expected == got:
+    rows = list(collection.aggregate(history.stays_pipeline(config.STALE_MINUTES)))
+    # Spec section 13: every document has exactly the keys mmsi, start, end (no _id).
+    bad_keys = sorted({tuple(sorted(r)) for r in rows if set(r) != STAY_KEYS})
+    # Rows missing a key are reported below as bad keys, not compared (key() needs all three).
+    got = {key(s) for s in rows if STAY_KEYS <= set(s)}
+    if expected == got and not bad_keys:
         print(f"{label}: OK ({len(expected)} stays, {len(docs)} positions)")
         return True
-    print(f"{label}: MISMATCH ({len(expected)} expected, {len(got)} from pipeline)")
-    for s in sorted(expected - got)[:10]:
-        print("  only in measure_stays:", s)
-    for s in sorted(got - expected)[:10]:
-        print("  only in pipeline:     ", s)
+    if expected != got:
+        print(f"{label}: MISMATCH ({len(expected)} expected, {len(got)} from pipeline)")
+        for s in sorted(expected - got)[:10]:
+            print("  only in measure_stays:", s)
+        for s in sorted(got - expected)[:10]:
+            print("  only in pipeline:     ", s)
+    if bad_keys:
+        print(f"{label}: MISMATCH (documents with keys other than {sorted(STAY_KEYS)})")
+        for keys in bad_keys[:10]:
+            extra = sorted(set(keys) - STAY_KEYS)
+            missing = sorted(STAY_KEYS - set(keys))
+            print(f"  keys {list(keys)}: extra {extra}, missing {missing}")
     return False
 
 
