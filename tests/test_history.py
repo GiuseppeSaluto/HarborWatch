@@ -597,3 +597,14 @@ def test_alone_is_false_for_gap_hours():
     for n in (1, 2):
         assert r[hour(n)]["anchored"] is None, n
         assert r[hour(n)]["alone"] is False, n
+
+
+def test_alone_is_false_when_the_only_neighbour_with_data_is_a_series_edge():
+    # Spec example: covered h0, h2, h3 with h1 a gap -> h0 alone, h2 and h3 not.
+    # h2's only neighbour with data is h3, the last hour of the series; code that
+    # does not look at the first or last row as a neighbour would mark it alone.
+    r = rows([0, 2, 3])
+    assert [r[hour(n)]["alone"] for n in (0, 2, 3)] == [True, False, False]
+    # Mirrored: h1's only neighbour with data is h0, the first hour of the series.
+    r = rows([0, 1, 3])
+    assert [r[hour(n)]["alone"] for n in (0, 1, 3)] == [False, False, True]

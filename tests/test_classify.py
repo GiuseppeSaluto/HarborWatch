@@ -149,6 +149,17 @@ def test_moored_scale_and_anchored_scale_fall_on_either_side_of_quay_threshold()
     assert near <= config.QUAY_DISTANCE_M < far
 
 
+def test_zero_length_segment_counts_as_its_point():
+    # Two equal consecutive vertices (seen in OSM data): no division by zero, and
+    # the distance is the distance from that point.
+    point_only = [[[8.90, LAT0], [8.90, LAT0]]]
+    assert dist(8.91, LAT0, point_only) == pytest.approx(0.01 * M_PER_DEG_LON, rel=0.02)
+    # A repeated vertex first in a polyline must not poison the minimum (a NaN
+    # from 0/0 would): the closest part is the real segment that follows.
+    line = [[[8.90, LAT0], [8.90, LAT0], [8.92, LAT0]]]
+    assert dist(8.91, LAT0 + 0.001, line) == pytest.approx(0.001 * M_PER_DEG_LAT, rel=0.02)
+
+
 # --- ship_category --------------------------------------------------------------------
 
 def test_ship_category_every_range_with_both_edges_and_the_code_just_outside():

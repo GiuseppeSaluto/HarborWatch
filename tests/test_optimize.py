@@ -384,6 +384,28 @@ def test_prepare_output_feeds_plan_berths():
     assert sorted(p["start"] for p in by.values()) == [0, 60]
 
 
+def test_prepare_free_from_is_whole_minutes_rounded_down_and_never_below_zero():
+    # Seen arrival, cargo default stay: the expected departure is `left` minutes
+    # from now. Fractions round down (90.75 -> 90, 15 s -> 0, not 1); a vessel
+    # already past its expected stay frees the berth at minute 0, never negative.
+    stay = config.SERVICE_MINUTES["cargo"]
+    for left, expected in ((90.75, 90), (0.25, 0), (0, 0), (-0.5, 0), (-60, 0)):
+        v = vessel(9, state="at_berth", since_minutes_ago=stay - left, since_seen=True)
+        _, berths, _ = run_prepare([v], [pberth("A", *GENOA)])
+        assert berths["A"]["free_from"] == expected, left
+
+
+def test_prepare_half_stay_free_from_is_also_rounded_down():
+    # Arrival not seen: the expected departure is since + half the default stay.
+    # The same rounding applies: 90.75 minutes left -> 90 (round or ceil give 91),
+    # 15 seconds left -> 0 (ceil gives 1).
+    half = config.SERVICE_MINUTES["cargo"] / 2
+    for left, expected in ((90.75, 90), (0.25, 0)):
+        v = vessel(9, state="at_berth", since_minutes_ago=half - left, since_seen=False)
+        _, berths, _ = run_prepare([v], [pberth("A", *GENOA)])
+        assert berths["A"]["free_from"] == expected, left
+
+
 # --- plan_berths: "wait" (spec section 13) ----------------------------------------------------
 # wait = start - arrival, also when arrival is not 0.
 

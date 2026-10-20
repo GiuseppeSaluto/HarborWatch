@@ -189,6 +189,33 @@ def test_single_position_between_two_different_states_is_not_noise():
     assert measure(pos) == [{"mmsi": 1, "start": T0 + 5 * STEP, "end": T0 + 65 * STEP}]
 
 
+def test_noise_at_the_second_and_penultimate_position_is_corrected():
+    # Only the first and last positions are exempt. A lone at_berth fix at the
+    # second (or penultimate) position has underway on both sides, so it becomes
+    # underway and no stay is born. Left uncorrected, it would be a one-minute
+    # stay: arrival seen on the first fix, departure on the next one.
+    for segments in ([("underway", 1), ("at_berth", 1), ("underway", 10)],
+                     [("underway", 10), ("at_berth", 1), ("underway", 1)]):
+        assert measure(track(1, segments)) == [], segments
+
+
+def test_berth_at_first_position_gives_no_stay_even_with_departure_on_last():
+    # Arrival and departure must both be seen. Spec example: at_berth, at_berth,
+    # underway -> no stay. The departure is seen (and on the last position, which
+    # would close a stay), but the vessel was already at berth on its first fix.
+    for segments in ([("at_berth", 2), ("underway", 1)],
+                     [("at_berth", 60), ("underway", 1)]):
+        assert measure(track(1, segments)) == [], segments
+
+
+def test_gap_after_the_first_position_after_departure_does_not_drop_the_stay():
+    # The gap check stops at the first position after the departure: a silence
+    # of any length after it (here ten times STALE_MINUTES) leaves the stay intact.
+    pos = track(1, [("underway", 5), ("at_berth", 60), ("underway", 1),
+                    ("gap", 10 * config.STALE_MINUTES), ("underway", 5)])
+    assert measure(pos) == [{"mmsi": 1, "start": T0 + 5 * STEP, "end": T0 + 65 * STEP}]
+
+
 # --- service_minutes -------------------------------------------------------------------
 # Interface (spec section 13): optimize.service_minutes(stays, window_minutes)
 # takes stay dicts {"category", "length" (metres), "minutes"} plus the length of

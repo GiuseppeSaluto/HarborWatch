@@ -167,6 +167,27 @@ def test_static_width_is_port_plus_starboard():
     assert _doc(_parse(static_msg()))["width"] == 32
 
 
+def test_static_missing_dimension_parts_count_as_zero_and_zero_sum_is_none():
+    # Spec section 13: a part missing from Dimension is 0, also with no Dimension
+    # key at all; a sum of 0 is an unknown size (None), not 0.
+    cases = [
+        ({"B": 50, "C": 8, "D": 8}, 50, 16),        # spec example: A missing
+        ({"A": 120, "D": 9}, 120, 9),                # B and C missing
+        ({"A": 0, "B": 0, "C": 8, "D": 8}, None, 16),
+        ({}, None, None),
+        (None, None, None),                          # no Dimension key
+    ]
+    for dimension, length, width in cases:
+        msg = static_msg()
+        if dimension is None:
+            del msg["Message"]["ShipStaticData"]["Dimension"]
+        else:
+            msg["Message"]["ShipStaticData"]["Dimension"] = dimension
+        doc = _doc(_parse(msg))
+        assert doc is not None, dimension
+        assert (doc["length"], doc["width"]) == (length, width), dimension
+
+
 def test_static_without_mmsi_is_rejected():
     msg = static_msg()
     del msg["MetaData"]["MMSI"]
