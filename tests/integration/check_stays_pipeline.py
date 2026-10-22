@@ -82,9 +82,25 @@ def handcrafted():
         [("underway", 10), ("at_berth", 60), ("underway", 1), ("anchored", 1)],   # confirmed by another state
         [("underway", 10), ("at_berth", 60), ("underway", 1), ("at_berth", 1)],   # final blip, still at berth
         [("underway", 10), ("at_berth", 60), ("underway", 1), ("gap", stale + 30), ("underway", 5)],
-        # One-position stay between two different states (not noise: its neighbours differ):
-        [("anchored", 1), ("at_berth", 1), ("underway", 1), ("underway", 1)],    # confirmed: one stay
-        [("anchored", 1), ("at_berth", 1), ("underway", 1)],                      # departure on last fix: none
+        # One-position stay between two different states (not noise: its neighbours differ).
+        # A leading underway confirms the arrival (spec section 13, arrival confirmation):
+        [("underway", 1), ("anchored", 1), ("at_berth", 1), ("underway", 2)],     # confirmed: one stay
+        [("underway", 1), ("anchored", 1), ("at_berth", 1), ("underway", 1)],     # departure on last fix: none
+        # Arrival confirmation (spec section 13): the fix before the arrival needs an earlier one.
+        [("underway", 1), ("at_berth", 2), ("underway", 2)],                      # arrival on 2nd fix: none
+        [("underway", 2), ("at_berth", 2), ("underway", 2)],                      # confirmed: one stay
+        [("anchored", 1), ("underway", 1), ("at_berth", 2), ("underway", 2)],     # confirmed by another state
+        [("underway", 1), ("at_berth", 60), ("underway", 2)],                     # first-fix blip in a stay: none
+        # Noise ignores gaps (spec example): the underway before the gap becomes at_berth,
+        # the stay then spans the gap and is dropped: none.
+        [("underway", 2), ("at_berth", 2), ("underway", 1), ("gap", 2 * stale),
+         ("at_berth", 1), ("underway", 2)],
+        # Arrival confirmation has no time limit: a long gap before the fix before
+        # the arrival does not drop the stay: one stay.
+        [("underway", 1), ("gap", 2 * stale), ("underway", 1), ("at_berth", 3), ("underway", 2)],
+        # Noise uses the original neighbour states (no propagation): U U B B U B U U
+        # -> one stay ending on the sixth fix.
+        [("underway", 2), ("at_berth", 2), ("underway", 1), ("at_berth", 1), ("underway", 2)],
     ]
     docs = []
     for i, segs in enumerate(cases):

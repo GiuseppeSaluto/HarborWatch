@@ -162,14 +162,14 @@ def test_one_vessel_gap_does_not_affect_another():
 # neighbour on both sides, of the same vessel, in the same state as each other.
 
 def test_first_position_of_a_vessel_is_never_corrected_as_noise():
-    # The lone underway fix has a neighbour on one side only: it stays, so the
-    # arrival is seen on the second position. The vessel's last fix is at_berth,
-    # like the second one: code that wraps around (index -1) and takes the last
-    # fix as the first one's "previous neighbour" would see at_berth on both
-    # sides, correct the first fix and lose the arrival. The final at_berth fix
-    # forms no stay, because its departure is not seen.
+    # Since the arrival-confirmation rule (2026-10-22) an arrival on the second
+    # position never gives a stay, whether the first fix is corrected or not:
+    # this history now expects no stay, and the first-position exemption is no
+    # longer visible in the output (see the report). The trap is kept: the last
+    # fix is at_berth like the second one, so index -1 wrap-around code would
+    # still see at_berth on both sides of the first fix.
     pos = track(1, [("underway", 1), ("at_berth", 60), ("underway", 5), ("at_berth", 1)])
-    assert measure(pos) == [{"mmsi": 1, "start": T0 + STEP, "end": T0 + 61 * STEP}]
+    assert measure(pos) == []
 
 
 def test_departure_on_the_last_position_is_not_confirmed():
@@ -192,31 +192,94 @@ def test_single_position_between_two_different_states_is_not_noise():
 
 def test_noise_at_the_second_and_penultimate_position_is_corrected():
     # Only the first and last positions are exempt.
-    # Second: a lone at_berth fix with underway on both sides becomes underway and
-    # no stay is born; left uncorrected it would be a one-minute stay, with the
-    # departure confirmed by the fixes after it.
+    # Second: a lone underway fix with at_berth on both sides becomes at_berth, so
+    # the vessel is at berth from its first fix and no arrival is seen; left
+    # uncorrected it would be the fix before an arrival, confirmed by the first
+    # fix, and a stay would be born. (The old case, underway, at_berth, underway...,
+    # gives no stay either way since the arrival-confirmation rule.)
     # Penultimate: a lone underway fix inside the berth run (at_berth on both
     # sides, the last fix included) becomes at_berth, so the vessel never left;
     # left uncorrected it would be a departure confirmed by the last fix.
-    for segments in ([("underway", 1), ("at_berth", 1), ("underway", 10)],
+    for segments in ([("at_berth", 1), ("underway", 1), ("at_berth", 60), ("underway", 5)],
                      [("underway", 5), ("at_berth", 60), ("underway", 1), ("at_berth", 1)]):
         assert measure(track(1, segments)) == [], segments
 
 
 def test_departure_confirmed_by_one_more_position_closes_the_stay():
-    # Spec example: underway, at_berth x3, underway, then one more fix -> one
+    # Spec example: underway x2, at_berth x3, underway, then one more fix -> one
     # stay ending on the first fix after the berth run. The confirming fix can
-    # be in any state.
+    # be in any state. (Two leading underway fixes: the arrival is confirmed too.)
     for confirming in ("underway", "anchored"):
-        pos = track(1, [("underway", 1), ("at_berth", 3), ("underway", 1), (confirming, 1)])
-        assert measure(pos) == [{"mmsi": 1, "start": T0 + STEP, "end": T0 + 4 * STEP}], confirming
+        pos = track(1, [("underway", 2), ("at_berth", 3), ("underway", 1), (confirming, 1)])
+        assert measure(pos) == [{"mmsi": 1, "start": T0 + 2 * STEP, "end": T0 + 5 * STEP}], confirming
 
 
 def test_final_blip_followed_by_at_berth_gives_no_stay():
-    # Spec example: underway, at_berth x3, underway, at_berth -> no stay. The
+    # Spec example: underway x2, at_berth x3, underway, at_berth -> no stay. The
     # underway fix was a blip (corrected by its neighbours) and the vessel is
-    # still at berth, so the departure was never real.
-    pos = track(1, [("underway", 1), ("at_berth", 3), ("underway", 1), ("at_berth", 1)])
+    # still at berth, so the departure was never real. With the arrival
+    # confirmed, an uncorrected blip would give a stay.
+    pos = track(1, [("underway", 2), ("at_berth", 3), ("underway", 1), ("at_berth", 1)])
+    assert measure(pos) == []
+
+
+def test_arrival_on_the_second_position_is_not_confirmed():
+    # Spec example: underway, at_berth, at_berth, underway, underway -> no stay.
+    # The fix before the arrival is the vessel's first: it could be a blip that
+    # an earlier fix, already deleted by the TTL, would correct.
+    pos = track(1, [("underway", 1), ("at_berth", 2), ("underway", 2)])
+    assert measure(pos) == []
+
+
+def test_arrival_confirmed_by_an_earlier_position_gives_the_stay():
+    # Spec example: one more underway at the start -> one stay, start on the
+    # first at_berth. The confirming fix can be in any state.
+    for confirming in ("underway", "anchored"):
+        pos = track(1, [(confirming, 1), ("underway", 1), ("at_berth", 2), ("underway", 2)])
+        assert measure(pos) == [{"mmsi": 1, "start": T0 + 2 * STEP, "end": T0 + 4 * STEP}], confirming
+
+
+def test_first_position_blip_inside_a_long_stay_gives_no_stay():
+    # The real bug: positions before the vessel's first fix were deleted by the
+    # TTL, and that first fix is an underway blip inside a long stay. Followed by
+    # at_berth and a confirmed departure, it must not look like an arrival.
+    pos = track(1, [("underway", 1), ("at_berth", 60), ("underway", 2)])
+    assert measure(pos) == []
+
+
+def test_arrival_confirmation_has_no_time_limit():
+    # Spec: a gap of any length between the fix that confirms the arrival and
+    # the fix before the arrival does not drop the stay; the gap check starts at
+    # the fix before the arrival. Here that gap is twice STALE_MINUTES. Code
+    # that starts the gap check at the confirming fix would return no stay.
+    gap = 2 * config.STALE_MINUTES
+    pos = track(1, [("underway", 1), ("gap", gap), ("underway", 1),
+                    ("at_berth", 3), ("underway", 2)])
+    first_berth = T0 + (2 + gap) * STEP
+    assert measure(pos) == [{"mmsi": 1, "start": first_berth, "end": first_berth + 3 * STEP}]
+
+
+def test_noise_correction_uses_original_neighbour_states():
+    # States: U U B B U B U U. The lone U at index 4 (B on both sides) becomes B;
+    # the lone B at index 5 has U on both sides in the original states (index 4
+    # is U before any correction), so it becomes U: corrections do not
+    # propagate. Result U U B B B U U U -> one stay ending at index 5. Code that
+    # reads the already-corrected index 4 (B) would keep index 5 at berth and
+    # end the stay at index 6 instead.
+    pos = track(1, [("underway", 2), ("at_berth", 2), ("underway", 1),
+                    ("at_berth", 1), ("underway", 2)])
+    assert measure(pos) == [{"mmsi": 1, "start": T0 + 2 * STEP, "end": T0 + 5 * STEP}]
+
+
+def test_noise_correction_ignores_gaps():
+    # Spec example: underway x2, at_berth x2, underway, 2 h gap, at_berth,
+    # underway x2 -> no stay. The underway before the gap has at_berth on both
+    # sides, so it becomes at_berth whatever the gap: the stay then spans the
+    # gap and is dropped. Code that does not correct across the gap would see a
+    # stay ending on that underway (confirmed by the next fix, the gap after it
+    # does not count).
+    pos = track(1, [("underway", 2), ("at_berth", 2), ("underway", 1),
+                    ("gap", 2 * config.STALE_MINUTES), ("at_berth", 1), ("underway", 2)])
     assert measure(pos) == []
 
 

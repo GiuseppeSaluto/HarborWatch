@@ -28,7 +28,8 @@ def measure_stays(positions, max_gap_minutes=None):
     positions: dicts with mmsi, ts and state, in any order. A stay counts only if we saw the
     vessel arrive and leave, with no gap over max_gap_minutes (default STALE_MINUTES) from
     the position before it to the one after it; end is the first position after the berth.
-    The departure needs one more position to be final: until then it may be a blip.
+    Arrival and departure each need one more position beyond them to be final: the position
+    before the arrival and the one after the departure may otherwise be uncorrected blips.
     """
     gap = timedelta(minutes=config.STALE_MINUTES if max_gap_minutes is None else max_gap_minutes)
     stays = []
@@ -48,7 +49,9 @@ def measure_stays(positions, max_gap_minutes=None):
             j = i
             while j + 1 < len(ps) and state[j + 1] == "at_berth":
                 j += 1
-            window = ps[i - 1:j + 2] if i > 0 else []  # the run plus one position each side
+            # The run plus one position each side. An arrival on the second position is not confirmed:
+            # once the TTL has deleted older positions, the first one may be a blip left uncorrected.
+            window = ps[i - 1:j + 2] if i > 1 else []
             # A departure on the last position is not confirmed: the next position may smooth it away.
             # Known limit: a vessel that goes silent right after leaving (AIS off, out of the box)
             # never gets that position, so the stay is never counted.

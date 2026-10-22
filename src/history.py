@@ -109,7 +109,7 @@ def stays_pipeline(max_gap_minutes):
         # 1. Each position sees its neighbours: same vessel, in time order.
         {"$setWindowFields": {**by_vessel, "output": {
             "prev_state": shift("$state", -1), "next_state": shift("$state", 1), "prev_ts": shift("$ts", -1),
-            "after_next_ts": shift("$ts", 2)}}},
+            "after_next_ts": shift("$ts", 2), "before_prev_ts": shift("$ts", -2)}}},
         # 2. Noise: a one-position blip takes its neighbours' state when they agree; gap since the previous one.
         {"$set": {
             "state": {"$cond": [{"$and": [{"$ne": ["$prev_state", None]}, {"$eq": ["$prev_state", "$next_state"]}]},
@@ -117,7 +117,7 @@ def stays_pipeline(max_gap_minutes):
             "gap": {"$subtract": ["$ts", "$prev_ts"]}}},
         # The next windows re-sort in memory, and Atlas M0 caps that sort at 32 MB and ignores
         # allowDiskUse: whole documents (location, sog...) broke it at 45k positions (2026-10-09).
-        {"$project": {"_id": 0, "mmsi": 1, "ts": 1, "state": 1, "gap": 1, "after_next_ts": 1}},
+        {"$project": {"_id": 0, "mmsi": 1, "ts": 1, "state": 1, "gap": 1, "after_next_ts": 1, "before_prev_ts": 1}},
         # 3. Number the runs of equal state: a running sum of "state changed here".
         {"$setWindowFields": {**by_vessel, "output": {"prev_smoothed": shift("$state", -1)}}},
         {"$set": {"new_run": {"$cond": [{"$eq": ["$state", "$prev_smoothed"]}, 0, 1]}}},
@@ -128,6 +128,8 @@ def stays_pipeline(max_gap_minutes):
             "_id": {"mmsi": "$mmsi", "run": "$run"}, "state": {"$first": "$state"},
             "start": {"$min": "$ts"}, "last": {"$max": "$ts"},
             "gap_before": {"$max": {"$cond": ["$new_run", "$gap", None]}},
+            # The run's first position looks two back: past the arrival, to the one confirming it.
+            "arrival_confirmed_by": {"$max": {"$cond": ["$new_run", "$before_prev_ts", None]}},
             "gap_inside": {"$max": {"$cond": ["$new_run", None, "$gap"]}},
             # The run's last position looks two ahead: past the departure, to the one confirming it.
             "confirmed_by": {"$max": "$after_next_ts"}}},
@@ -137,8 +139,9 @@ def stays_pipeline(max_gap_minutes):
         # 6. Complete berth stays: arrival and departure seen, no gap over max_gap_minutes.
         # The departure is confirmed when a position follows it (see measure_stays):
         # confirmed_by is then later than the departure itself, otherwise equal or null.
+        # The arrival is confirmed when a position precedes the one before it.
         {"$match": {
-            "state": "at_berth",
+            "state": "at_berth", "arrival_confirmed_by": {"$ne": None},
             "gap_before": {"$ne": None, "$lte": gap_ms}, "gap_after": {"$ne": None, "$lte": gap_ms},
             "$or": [{"gap_inside": None}, {"gap_inside": {"$lte": gap_ms}}],
             "$expr": {"$gt": ["$confirmed_by", "$next_start"]}}},
