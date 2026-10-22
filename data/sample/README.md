@@ -13,6 +13,7 @@ Notes:
 
 - The stays include harbour boats and service craft, often a few minutes long. The dashboard measures expected stays only from vessels of at least 100 m and stays of at least 1 hour (`MIN_STAY_VESSEL_M` and `MIN_STAY_MINUTES` in `src/config.py`).
 - A vessel that sent positions but never its static data has no entry in `vessels.jsonl`.
+- `stays.jsonl` was re-exported on 2026-10-22, after fixing stays cut short by a one-position blip at departure or started by one left at the edge of the 7-day history (issue #3). Stays whose positions had already expired could only be checked against each other, so a few short stays of harbour boats may still end early.
 
 Reading a file with pandas:
 
