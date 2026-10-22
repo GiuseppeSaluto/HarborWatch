@@ -76,6 +76,15 @@ def handcrafted():
         [("anchored", 10), ("at_berth", 100), ("underway", 1), ("at_berth", 100), ("anchored", 10)],
         [("underway", 10), ("at_berth", 70), ("underway", 20), ("at_berth", 80), ("underway", 10)],
         [("underway", 5), ("gap", stale + 15), ("at_berth", 120), ("underway", 10)],
+        # Departure confirmation (spec section 13, 2026-10-22):
+        [("underway", 10), ("at_berth", 60), ("underway", 1)],                    # departure on last fix: none
+        [("underway", 10), ("at_berth", 60), ("underway", 2)],                    # confirmed: one stay
+        [("underway", 10), ("at_berth", 60), ("underway", 1), ("anchored", 1)],   # confirmed by another state
+        [("underway", 10), ("at_berth", 60), ("underway", 1), ("at_berth", 1)],   # final blip, still at berth
+        [("underway", 10), ("at_berth", 60), ("underway", 1), ("gap", stale + 30), ("underway", 5)],
+        # One-position stay between two different states (not noise: its neighbours differ):
+        [("anchored", 1), ("at_berth", 1), ("underway", 1), ("underway", 1)],    # confirmed: one stay
+        [("anchored", 1), ("at_berth", 1), ("underway", 1)],                      # departure on last fix: none
     ]
     docs = []
     for i, segs in enumerate(cases):

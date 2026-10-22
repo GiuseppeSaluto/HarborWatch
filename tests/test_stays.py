@@ -172,14 +172,15 @@ def test_first_position_of_a_vessel_is_never_corrected_as_noise():
     assert measure(pos) == [{"mmsi": 1, "start": T0 + STEP, "end": T0 + 61 * STEP}]
 
 
-def test_departure_on_the_last_position_closes_the_stay():
-    # The last fix is the only one after the berth run: it is not noise and its
-    # ts is the end. Vessel 2 sits at berth around it, to check that neighbours
-    # are taken from the same vessel only.
+def test_departure_on_the_last_position_is_not_confirmed():
+    # Since 2026-10-22 a departure must be confirmed by another position of the
+    # same vessel after it. Here the first fix after the berth run is the
+    # vessel's last one: it could be a blip, so no stay is returned. Vessel 2
+    # has fixes after it: they must not confirm vessel 1's departure.
     a = track(1, [("underway", 5), ("at_berth", 60), ("underway", 1)])
     b = track(2, [("at_berth", 80)], start=T0 + 30 * STEP)
     result = measure(sorted(a + b, key=lambda p: p["ts"]))
-    assert stays_of(result, 1) == [{"mmsi": 1, "start": T0 + 5 * STEP, "end": T0 + 65 * STEP}]
+    assert stays_of(result, 1) == []
 
 
 def test_single_position_between_two_different_states_is_not_noise():
@@ -190,21 +191,44 @@ def test_single_position_between_two_different_states_is_not_noise():
 
 
 def test_noise_at_the_second_and_penultimate_position_is_corrected():
-    # Only the first and last positions are exempt. A lone at_berth fix at the
-    # second (or penultimate) position has underway on both sides, so it becomes
-    # underway and no stay is born. Left uncorrected, it would be a one-minute
-    # stay: arrival seen on the first fix, departure on the next one.
+    # Only the first and last positions are exempt.
+    # Second: a lone at_berth fix with underway on both sides becomes underway and
+    # no stay is born; left uncorrected it would be a one-minute stay, with the
+    # departure confirmed by the fixes after it.
+    # Penultimate: a lone underway fix inside the berth run (at_berth on both
+    # sides, the last fix included) becomes at_berth, so the vessel never left;
+    # left uncorrected it would be a departure confirmed by the last fix.
     for segments in ([("underway", 1), ("at_berth", 1), ("underway", 10)],
-                     [("underway", 10), ("at_berth", 1), ("underway", 1)]):
+                     [("underway", 5), ("at_berth", 60), ("underway", 1), ("at_berth", 1)]):
         assert measure(track(1, segments)) == [], segments
+
+
+def test_departure_confirmed_by_one_more_position_closes_the_stay():
+    # Spec example: underway, at_berth x3, underway, then one more fix -> one
+    # stay ending on the first fix after the berth run. The confirming fix can
+    # be in any state.
+    for confirming in ("underway", "anchored"):
+        pos = track(1, [("underway", 1), ("at_berth", 3), ("underway", 1), (confirming, 1)])
+        assert measure(pos) == [{"mmsi": 1, "start": T0 + STEP, "end": T0 + 4 * STEP}], confirming
+
+
+def test_final_blip_followed_by_at_berth_gives_no_stay():
+    # Spec example: underway, at_berth x3, underway, at_berth -> no stay. The
+    # underway fix was a blip (corrected by its neighbours) and the vessel is
+    # still at berth, so the departure was never real.
+    pos = track(1, [("underway", 1), ("at_berth", 3), ("underway", 1), ("at_berth", 1)])
+    assert measure(pos) == []
 
 
 def test_berth_at_first_position_gives_no_stay_even_with_departure_on_last():
     # Arrival and departure must both be seen. Spec example: at_berth, at_berth,
-    # underway -> no stay. The departure is seen (and on the last position, which
-    # would close a stay), but the vessel was already at berth on its first fix.
+    # underway -> no stay. The vessel was already at berth on its first fix.
+    # Since the departure now also needs a confirming fix, the cases with a
+    # second underway at the end keep the test about the arrival: there the
+    # departure is confirmed, and only the unseen arrival rules the stay out.
     for segments in ([("at_berth", 2), ("underway", 1)],
-                     [("at_berth", 60), ("underway", 1)]):
+                     [("at_berth", 2), ("underway", 2)],
+                     [("at_berth", 60), ("underway", 2)]):
         assert measure(track(1, segments)) == [], segments
 
 
