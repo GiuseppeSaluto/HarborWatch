@@ -1,89 +1,20 @@
 """Streamlit dashboard: vessels by state on a map, and waiting time at anchor."""
 
 import asyncio
-import math
 from datetime import UTC, datetime, timedelta
 
-import altair as alt
 import pandas as pd
-import pydeck as pdk
 import streamlit as st
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 
 import config
+from app_charts import chart_time, congestion_chart, fmt, fmt_age, gantt, legend, local, port_map, vessel_name
+from app_theme import ICONS, LABELS, RUNNING_ICON_CSS, header_grid_css, state_card_css
 from classify import COMMERCIAL, ship_category
 from diagnostics import diagnose, probe_stream
-from icons import SVG, vessel_icon
 from history import continuous_hours, hourly_series, longest_run, vessel_tracks
 from optimize import plan_berths, prepare, service_minutes, trusted_stay, usable_stays
-
-LABELS = {"at_berth": "At berth", "anchored": "At anchor", "underway": "Underway"}
-ICONS = {"at_berth": ":material/directions_boat:", "anchored": ":material/anchor:", "underway": ":material/sailing:"}
-# Categorical slots 1-3 of the dataviz skill's validated reference palette, stepped per theme.
-# Same color for a state everywhere: map dots and berth-plan bars.
-PALETTE = {"light": {"at_berth": "#2a78d6", "anchored": "#eb6834", "underway": "#1baf7a", "surface": "#ffffff"},
-           "dark": {"at_berth": "#3987e5", "anchored": "#d95926", "underway": "#199e70", "surface": "#0e1117"}}
-MOORED, PROPOSED = "Moored now (estimated stay)", "Proposed mooring"
-
-
-def local(t):
-    """A UTC instant as the port's clock time, for text."""
-    return pd.Timestamp(t).tz_convert(config.TIMEZONE)
-
-
-def chart_time(t):
-    """The port's clock time labelled as UTC, for charts.
-
-    Vega-Lite only draws times in UTC or in the browser's zone; on a UTC scale this shows the
-    port's clock whatever the viewer's browser is set to.
-    """
-    return local(t).tz_localize(None).tz_localize("UTC")
-
-
-# Chart-paper grid behind the page header, after aisstream.io's home page: 1 px lines every
-# 32 px and a faint glow, fading out downwards so it never sits behind charts.
-GRID = {"light": {"line": "rgba(49, 51, 63, 0.08)", "glow": "rgba(42, 120, 214, 0.10)"},
-        "dark": {"line": "rgba(250, 250, 250, 0.06)", "glow": "rgba(57, 135, 229, 0.16)"}}
-
-
-def header_grid_css():
-    g = GRID["dark" if st.context.theme.type == "dark" else "light"]
-    return f"""<style>
-[data-testid=stMain]::before {{
-    content: ""; position: absolute; inset: 0 0 auto 0; height: 340px; pointer-events: none;
-    background-image: linear-gradient({g["line"]} 1px, transparent 1px),
-        linear-gradient(90deg, {g["line"]} 1px, transparent 1px),
-        radial-gradient(circle at 78% 24%, {g["glow"]}, transparent 30%);
-    background-size: 32px 32px, 32px 32px, auto;
-    mask-image: linear-gradient(to bottom, black 60%, transparent);
-}}
-</style>"""
-
-
-# Streamlit's "Running..." icon cycles people doing sports, and st.spinner shows a turning ring:
-# a ship bobbing on moving waves instead, for both.
-# Two mask layers (hull, wave tile) over the text color, like the original faded icon.
-# < and > escaped in the SVGs: st.html drops a <style> whose text contains a tag.
-RUNNING_ICON_CSS = """<style>
-[data-testid=stStatusWidgetRunningIcon] > * {display: none;}
-[data-testid=stSpinnerIcon] {width: 1.6rem; height: 1.6rem; border: 0; border-radius: 0;}
-:is([data-testid=stStatusWidgetRunningIcon], [data-testid=stSpinnerIcon]) {
-    background-color: currentColor; opacity: 0.6;
-    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 18'%3E%3Cpath d='M2 11h20l-3 5H5zM7 7h9v4H7zM13 3h2v4h-2z'/%3E%3C/svg%3E") 50% 0% / 100% 72% no-repeat,
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 4'%3E%3Cpath d='M0 2.5Q2 .5 4 2.5T8 2.5' fill='none' stroke='black' stroke-width='1.2'/%3E%3C/svg%3E") 0 100% / 8px 4px repeat-x;
-    animation: hw-sail 1.2s linear infinite;
-}
-@keyframes hw-sail {
-    50% {mask-position: 50% 30%, 4px 100%;}
-    to {mask-position: 50% 0%, 8px 100%;}
-}
-@media (prefers-reduced-motion: reduce) {:is([data-testid=stStatusWidgetRunningIcon], [data-testid=stSpinnerIcon]) {animation: none;}}
-</style>"""
-
-
-def colors():
-    return PALETTE["dark" if st.context.theme.type == "dark" else "light"]
 
 
 @st.cache_resource
@@ -110,11 +41,6 @@ def load_states(db, now):
         }},
     ])
     return pd.DataFrame(list(rows))
-
-
-def fmt(delta):
-    minutes = int(delta.total_seconds() // 60)
-    return f"{minutes // 60}h {minutes % 60:02d}m"
 
 
 def toggle_map_state(state):
@@ -160,9 +86,30 @@ def dashboard():
     anchored = df[df["state"] == "anchored"].assign(
         wait=lambda d: now - pd.to_datetime(d["since"], utc=True),
         seen=lambda d: d["since_seen"].eq(True) if "since_seen" in d else False)
-    counts = df["state"].value_counts()
-
     unseen = int((~anchored["seen"]).sum())
+    state_cards(df["state"].value_counts(), anchored, unseen)
+
+    visible_states = [s for s in LABELS if st.session_state.get(f"show_{s}", True)]
+    mapped = df[df["state"].isin(visible_states)]
+    left, right = st.columns([2, 1], gap="medium")
+    with left:
+        st.pydeck_chart(port_map(mapped, recent_tracks() if show_tracks else ([], {})), height=560)
+        if not visible_states:
+            st.caption("All vessel states hidden. Select a card to show vessels.")
+        st.caption(legend(mapped) + f" · dashed lines: last {config.TRACK_HOURS} h · circles: berth areas · "
+                   "hover for details", unsafe_allow_html=True)
+    with right:
+        anchorage_panel(anchored, unseen)
+
+    berth_plan(everyone, now)
+
+    st.caption(f"Updated {local(now):%H:%M:%S %Z} · vessels heard from in the last {config.STALE_MINUTES} min · "
+               f"{hidden} other vessels hidden (tugs, yachts, service craft, or type not received yet) · "
+               "map © OpenStreetMap contributors")
+
+
+def state_cards(counts, anchored, unseen):
+    """One card per state (selecting it hides or shows those vessels on the map), then the mean wait."""
     # A wrapping row instead of columns: four cards in a row on a wide screen, two by two on a
     # phone (columns would stack them one per row, a whole screen before the map).
     with st.container(horizontal=True, key="cards"):
@@ -179,43 +126,30 @@ def dashboard():
                       f" {unseen} of {len(anchored)} arrived before we saw them: the real mean is longer." if unseen else ""))
     st.html(state_card_css())
 
-    visible_states = [s for s in LABELS if st.session_state.get(f"show_{s}", True)]
-    mapped = df[df["state"].isin(visible_states)]
-    left, right = st.columns([2, 1], gap="medium")
-    with left:
-        st.pydeck_chart(port_map(mapped, recent_tracks() if show_tracks else ([], {})), height=560)
-        if not visible_states:
-            st.caption("All vessel states hidden. Select a card to show vessels.")
-        st.caption(legend(mapped) + f" · dashed lines: last {config.TRACK_HOURS} h · circles: berth areas · "
-                   "hover for details", unsafe_allow_html=True)
-    with right:
-        st.subheader("Waiting at anchor")
-        if anchored.empty:
-            st.write("No vessel at anchor.")
-        else:
-            waiting = anchored.sort_values("wait", ascending=False)
-            st.dataframe(pd.DataFrame({
-                "vessel": [r["name"] if isinstance(r["name"], str) else str(r["mmsi"]) for _, r in waiting.iterrows()],
-                "type": waiting["type"], "length": waiting["length"],
-                "wait": [("" if r["seen"] else "≥ ") + fmt(r["wait"]) for _, r in waiting.iterrows()],
-            }), hide_index=True)
-            if unseen:
-                st.caption("≥: we did not see the vessel arrive, so it has been waiting at least this long.")
-        # The anchorage now and its history side by side: both are about the same vessels.
-        st.markdown("**At anchor, per hour**")
-        history = congestion_history()
-        if history.empty:
-            st.write("No history yet.")
-        else:
-            st.altair_chart(congestion_chart(history), width="stretch")
-            st.caption("Commercial vessels seen at anchor each hour (Genoa time). "
-                       "Gaps: hours without data, not empty anchorages.")
 
-    berth_plan(everyone, now)
-
-    st.caption(f"Updated {local(now):%H:%M:%S %Z} · vessels heard from in the last {config.STALE_MINUTES} min · "
-               f"{hidden} other vessels hidden (tugs, yachts, service craft, or type not received yet) · "
-               "map © OpenStreetMap contributors")
+def anchorage_panel(anchored, unseen):
+    """The vessels waiting at anchor now, longest wait first, and the anchorage's hourly history."""
+    st.subheader("Waiting at anchor")
+    if anchored.empty:
+        st.write("No vessel at anchor.")
+    else:
+        waiting = anchored.sort_values("wait", ascending=False)
+        st.dataframe(pd.DataFrame({
+            "vessel": [vessel_name(r["name"], r["mmsi"]) for _, r in waiting.iterrows()],
+            "type": waiting["type"], "length": waiting["length"],
+            "wait": [("" if r["seen"] else "≥ ") + fmt(r["wait"]) for _, r in waiting.iterrows()],
+        }), hide_index=True)
+        if unseen:
+            st.caption("≥: we did not see the vessel arrive, so it has been waiting at least this long.")
+    # The anchorage now and its history side by side: both are about the same vessels.
+    st.markdown("**At anchor, per hour**")
+    history = congestion_history()
+    if history.empty:
+        st.write("No history yet.")
+    else:
+        st.altair_chart(congestion_chart(history), width="stretch")
+        st.caption("Commercial vessels seen at anchor each hour (Genoa time). "
+                   "Gaps: hours without data, not empty anchorages.")
 
 
 @st.cache_data(ttl=600)
@@ -255,7 +189,7 @@ def berth_plan(df, now):
                 "since": r["since"], "since_seen": r.get("since_seen") is True,  # missing (older documents) = not seen
                 "lon": r["lon"], "lat": r["lat"]}
                for _, r in rows.iterrows()]
-    names = {r["mmsi"]: r["name"] or str(r["mmsi"]) for _, r in rows.iterrows()}
+    names = {r["mmsi"]: vessel_name(r["name"], r["mmsi"]) for _, r in rows.iterrows()}
     service, counts, window = stay_estimates()
     ships, berths, unfit = prepare(vessels, config.BERTHS, now, service)
     plan = plan_berths(ships, berths)
@@ -264,11 +198,11 @@ def berth_plan(df, now):
         return
     shown = {b["name"] for b in berths if b["free_from"]} | {p["berth"] for p in plan}
     st.altair_chart(gantt(plan, [b for b in berths if b["name"] in shown], now, names), width="stretch")
-    with st.expander("Table view"):
+    with st.expander("Proposed moorings as a table"):
         st.dataframe(pd.DataFrame([{
             "vessel": names[p["mmsi"]], "berth": p["berth"],
             "moors at": f"{local(now + timedelta(minutes=p['start'])):%a %H:%M %Z}",
-            "more wait": fmt(timedelta(minutes=p["wait"])),
+            "extra wait": fmt(timedelta(minutes=p["wait"])),
         } for p in plan]), hide_index=True)
     # Say who is left out instead of dropping them silently: a vessel longer than every berth
     # we know of in its category, or one whose length AIS has not told us yet.
@@ -339,7 +273,7 @@ def data_numbers(age, stopped):
                         f"stays and a continuous window of {config.STAY_WINDOW_FACTOR}x its default stay; "
                         "otherwise it uses the default.")
     cols[1].metric("Atlas storage", f"{used_mb:.1f} MB", help=f"of {config.STORAGE_LIMIT_MB} MB "
-                   f"({100 * used_mb / config.STORAGE_LIMIT_MB:.1f}%); the TTL keeps it near ~70 MB")
+                   f"({100 * used_mb / config.STORAGE_LIMIT_MB:.1f}%); the TTL keeps it near ~57 MB")
 
 
 # Badge per diagnosis: (label, icon, color). Status colors as in the data badge: green when fine,
@@ -375,49 +309,6 @@ def diagnostics_panel(atlas_ok, age):
                    + ("" if probe["confirmed"] else ", subscription not confirmed"))
 
 
-def state_card_css():
-    """State colors and visibility controls for the map cards."""
-    c = colors()
-    css = "<style>.st-key-cards > div {flex: 1 1 170px; min-width: 150px;}"
-    for s in LABELS:
-        card = f".st-key-state-{s}"
-        visible = st.session_state.get(f"show_{s}", True)
-        css += (
-            f"{card} {{position: relative;}}"
-            f"{card} [data-testid=stMetric] {{box-shadow: inset 0 3px 0 {c[s] if visible else 'transparent'};"
-            f"opacity: {1 if visible else 0.45}; padding-right: 48px;}}"
-            f"{card} [data-testid=stMetricIcon] {{color: {c[s]};}}"
-            f".st-key-map-{s} {{position: absolute; inset: 0; z-index: 1;}}"
-            f"{card} [data-testid=stButton] {{height: 100%;}}"
-            f"{card} button {{height: 100%; border: none; background: transparent;"
-            f"color: {c[s] if visible else 'inherit'}; justify-content: flex-end; align-items: flex-start; padding: 16px;}}"
-            f"{card} button [data-testid=stIconMaterial] {{position: absolute; right: 16px; top: 16px;}}"
-            f"{card} button:hover {{background: {c[s]}14; color: {c[s]};}}"
-            f"{card} button p {{position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);}}"
-        )
-    return css + "</style>"
-
-
-def legend(df):
-    """Map legend (HTML, for st.caption): the state colors of the current theme, then the shapes
-    of the categories on the map."""
-    c = colors()
-    shape = lambda k: SVG[k].replace('width="48" height="48"', 'width="1.1em" height="1.1em" fill="currentColor" '
-                                     'style="vertical-align:-0.2em"')
-    present = {vessel_icon(t)["id"] for t in df["type"]}
-    return " · ".join([f'<span style="color:{c[s]}">●</span> {LABELS[s].lower()}' for s in LABELS]
-                      + [f"{shape(k)} {k}" for k in SVG if k in present])
-
-
-def fmt_age(delta):
-    seconds = int(delta.total_seconds())
-    return f"{seconds} s ago" if seconds < 120 else f"{seconds // 60} min ago" if seconds < 7200 else f"{seconds // 3600} h ago"
-
-
-def rgb(hex_color):
-    return [int(hex_color[i:i + 2], 16) for i in (1, 3, 5)]
-
-
 @st.cache_data(ttl=60)
 def recent_tracks():
     """vessel_tracks over the last TRACK_HOURS, plus how long each vessel has been followed."""
@@ -430,121 +321,6 @@ def recent_tracks():
         first, last = spans.get(p["mmsi"], (p["ts"], p["ts"]))
         spans[p["mmsi"]] = (min(first, p["ts"]), max(last, p["ts"]))
     return vessel_tracks(positions, now), {m: last - first for m, (first, last) in spans.items()}
-
-
-def port_map(df, tracks_and_spans):
-    """Vessels shaped by category and colored by state, plus one ring per berth area; both explain
-    themselves on hover."""
-    c = colors()
-    known = lambda v, unit="": "?" if pd.isna(v) else f"{v:g}{unit}"
-    vessels = pd.DataFrame({
-        "position": df[["lon", "lat"]].values.tolist(),
-        "color": df["state"].map(lambda s: rgb(c[s])),
-        "icon": df["type"].map(vessel_icon),
-        # Plain-text title/line1/line2 on both layers: pydeck has one tooltip template for every
-        # layer, and it escapes field values, so the markup lives in the template, not the data.
-        "title": [r["name"] if isinstance(r["name"], str) else str(r["mmsi"]) for _, r in df.iterrows()],
-        "line1": [f"{r['type']}, {known(r['length'], ' m')}" for _, r in df.iterrows()],
-        "line2": [f"{LABELS[r['state']]}, {known(r['sog'], ' kn')}" for _, r in df.iterrows()],
-    })
-    by_area = {}
-    for b in config.BERTHS:
-        by_area.setdefault(b["zone"], []).append(b)
-    areas = pd.DataFrame([{
-        "position": [bs[0]["lon"], bs[0]["lat"]], "name": area,
-        "title": area,
-        "line1": f"{len(bs)} berth{'s' * (len(bs) > 1)}: {', '.join(str(b['length']) for b in bs)} m",
-        "line2": f"accepts {', '.join(bs[0]['categories'])}",
-    } for area, bs in by_area.items()])
-    # Direct labels only where they fit: the passenger terminals and SECH sit a few hundred
-    # metres apart, so their names would pile up; hovering their rings tells them apart.
-    km = lambda p, q: math.dist([p[0] * 111 * math.cos(math.radians(p[1])), p[1] * 111],
-                                [q[0] * 111 * math.cos(math.radians(q[1])), q[1] * 111])
-    labeled = areas[[all(km(p, q) > 1 for q in areas["position"] if q is not p) for p in areas["position"]]]
-    # Paths only for the vessels on the map, so the commercial-only toggle applies to them too.
-    tracks, spans = tracks_and_spans
-    shown = {r["mmsi"]: r for _, r in df.iterrows()}
-    paths = pd.DataFrame([{
-        "path": path, "color": rgb(c[shown[t["mmsi"]]["state"]]),
-        "title": shown[t["mmsi"]]["name"] if isinstance(shown[t["mmsi"]]["name"], str) else str(t["mmsi"]),
-        "line1": f"path of the last {fmt(spans[t['mmsi']])}", "line2": LABELS[shown[t["mmsi"]]["state"]],
-    } for t in tracks if t["mmsi"] in shown for path in t["paths"]],
-        columns=["path", "color", "title", "line1", "line2"])
-    ink = [255, 255, 255] if st.context.theme.type == "dark" else [11, 11, 11]
-    return pdk.Deck(
-        map_style=None,  # Streamlit's basemap, light or dark with the theme
-        initial_view_state=pdk.ViewState(latitude=44.405, longitude=8.85, zoom=11.3),
-        tooltip={"html": "<b>{title}</b><br>{line1}<br>{line2}"},
-        layers=[
-            # A faint fill makes the whole ring hoverable: deck.gl only picks drawn pixels, so an
-            # outline alone would need the pointer exactly on its 1.5 px line.
-            pdk.Layer("ScatterplotLayer", areas, get_position="position", get_radius=220, filled=True,
-                      get_fill_color=ink + [30], stroked=True, get_line_color=ink, line_width_min_pixels=1.5,
-                      pickable=True),
-            pdk.Layer("TextLayer", labeled, get_position="position", get_text="name", get_size=13,
-                      get_color=ink, get_pixel_offset=[0, -20]),
-            # Under the dots, so a vessel's dot stays on top of its own path.
-            # Dashed: a track joins sampled positions, it is not the exact route sailed.
-            pdk.Layer("PathLayer", paths, get_path="path", get_color="color", get_width=2,
-                      width_min_pixels=2, opacity=0.7, pickable=True,
-                      extensions=[{"@@type": "PathStyleExtension", "dash": True}], get_dash_array=[4, 3],
-                      dash_justified=True),
-            # Surface-colored halo keeps overlapping icons apart (moored ships sit side by side).
-            # Quoted: pydeck turns a bare string into a JavaScript expression ("pixels" = an undefined variable).
-            pdk.Layer("ScatterplotLayer", vessels, get_position="position", get_fill_color=rgb(c["surface"]) + [200],
-                      get_radius=11, radius_units="'pixels'"),
-            # Shape = category, color = state; 20 px whatever the zoom (IconLayer sizes are in pixels by
-            # default), so the anchorage stays readable at zoom 11.
-            pdk.Layer("IconLayer", vessels, get_position="position", get_icon="icon", get_color="color",
-                      get_size=20, pickable=True),
-        ],
-    )
-
-
-def congestion_chart(history):
-    """One series, so no legend: the subheader names it. Hover shows the hour and the count."""
-    c = colors()
-    hover = alt.selection_point(on="pointerover", nearest=True, fields=["hour"], empty=False, clear="pointerout")
-    base = alt.Chart(history).encode(
-        x=alt.X("hour:T", title=None, scale=alt.Scale(type="utc"), axis=alt.Axis(format="%a", grid=False, tickCount={"interval": "day", "step": 1})))  # one label a day
-    line = base.mark_line(color=c["anchored"], strokeWidth=2).encode(
-        y=alt.Y("anchored:Q", title="vessels", axis=alt.Axis(tickMinStep=1)))
-    points = base.mark_point(filled=True, size=80, color=c["anchored"]).encode(
-        y="anchored:Q", opacity=alt.condition(hover, alt.value(1), alt.value(0)),
-        tooltip=[alt.Tooltip("label:N", title="hour"), alt.Tooltip("anchored:Q", title="at anchor")],
-    ).add_params(hover)
-    alone = base.mark_point(filled=True, size=64, color=c["anchored"]).encode(y="anchored:Q").transform_filter(
-        alt.datum.alone)
-    rule = base.mark_rule(color="gray").encode(opacity=alt.condition(hover, alt.value(0.5), alt.value(0)))
-    return (line + alone + rule + points).properties(height=220)
-
-
-def gantt(plan, berths, now, names):
-    """One row per berth: the moored vessel's estimated stay, then the proposed moorings."""
-    at = lambda minutes: now + timedelta(minutes=minutes)
-    bars = pd.DataFrame(
-        [{"berth": b["name"], "vessel": names.get(b["occupied_by"], str(b["occupied_by"])), "kind": MOORED,
-          "from": now, "to": at(b["free_from"])}
-         for b in berths if b["free_from"]] +
-        [{"berth": p["berth"], "vessel": names[p["mmsi"]], "kind": PROPOSED, "from": at(p["start"]), "to": at(p["end"])}
-         for p in plan])
-    # Tooltips have no scale, so they get the local times as text; the bars get chart_time.
-    bars["from_text"], bars["to_text"] = (bars[t].map(lambda d: f"{local(d):%a %H:%M}") for t in ("from", "to"))
-    bars["from"], bars["to"] = bars["from"].map(chart_time), bars["to"].map(chart_time)
-    c = colors()
-    names = [b["name"] for b in berths]  # berths.json order, west to east; free berths keep their row
-    # A 2px stroke in the page color keeps a moored bar and the proposed one after it apart.
-    return alt.Chart(bars).mark_bar(cornerRadius=4, height={"band": 0.7}, stroke=c["surface"], strokeWidth=2).encode(
-        # utc scale + plain format = the labels as given (chart_time); a formatType would switch to browser time.
-        x=alt.X("from:T", title=None, scale=alt.Scale(type="utc"), axis=alt.Axis(format="%a %H:%M", grid=False)),
-        x2="to:T",
-        # Every berth labelled in full: Vega would otherwise drop overlapping labels and cut long ones.
-        y=alt.Y("berth:N", title=None, scale=alt.Scale(domain=names), sort=names,
-                axis=alt.Axis(labelOverlap=False, labelLimit=220)),
-        color=alt.Color("kind:N", title=None, legend=alt.Legend(orient="top", labelLimit=320),
-                        scale=alt.Scale(domain=[MOORED, PROPOSED], range=[c["at_berth"], c["anchored"]])),
-        tooltip=["vessel:N", "berth:N", "kind:N", alt.Tooltip("from_text:N", title="from"), alt.Tooltip("to_text:N", title="to")],
-    ).properties(height=30 * len(berths))
 
 
 st.html(header_grid_css())  # style only: st.html applies it without taking space on the page
