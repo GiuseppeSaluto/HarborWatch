@@ -61,6 +61,27 @@ def header_grid_css():
 </style>"""
 
 
+# Streamlit's "Running..." icon cycles people doing sports, and st.spinner shows a turning ring:
+# a ship bobbing on moving waves instead, for both.
+# Two mask layers (hull, wave tile) over the text color, like the original faded icon.
+# < and > escaped in the SVGs: st.html drops a <style> whose text contains a tag.
+RUNNING_ICON_CSS = """<style>
+[data-testid=stStatusWidgetRunningIcon] > * {display: none;}
+[data-testid=stSpinnerIcon] {width: 1.6rem; height: 1.6rem; border: 0; border-radius: 0;}
+:is([data-testid=stStatusWidgetRunningIcon], [data-testid=stSpinnerIcon]) {
+    background-color: currentColor; opacity: 0.6;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 18'%3E%3Cpath d='M2 11h20l-3 5H5zM7 7h9v4H7zM13 3h2v4h-2z'/%3E%3C/svg%3E") 50% 0% / 100% 72% no-repeat,
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 4'%3E%3Cpath d='M0 2.5Q2 .5 4 2.5T8 2.5' fill='none' stroke='black' stroke-width='1.2'/%3E%3C/svg%3E") 0 100% / 8px 4px repeat-x;
+    animation: hw-sail 1.2s linear infinite;
+}
+@keyframes hw-sail {
+    50% {mask-position: 50% 30%, 4px 100%;}
+    to {mask-position: 50% 0%, 8px 100%;}
+}
+@media (prefers-reduced-motion: reduce) {:is([data-testid=stStatusWidgetRunningIcon], [data-testid=stSpinnerIcon]) {animation: none;}}
+</style>"""
+
+
 def colors():
     return PALETTE["dark" if st.context.theme.type == "dark" else "light"]
 
@@ -527,4 +548,5 @@ def gantt(plan, berths, now, names):
 
 
 st.html(header_grid_css())  # style only: st.html applies it without taking space on the page
+st.html(RUNNING_ICON_CSS)  # its own call: st.html keeps only the first <style> it is given
 dashboard()
