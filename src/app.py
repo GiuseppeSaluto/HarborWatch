@@ -183,7 +183,6 @@ def stay_estimates():
 
 def berth_plan(df, now):
     """Phase 2: proposed berth and start time for every commercial vessel at anchor."""
-    st.subheader("Proposed berth plan")
     rows = df.astype(object).where(df.notna(), None)  # NaN (unknown length, name) -> None
     vessels = [{"mmsi": r["mmsi"], "state": r["state"], "category": r["type"], "length": r["length"],
                 "since": r["since"], "since_seen": r.get("since_seen") is True,  # missing (older documents) = not seen
@@ -193,10 +192,24 @@ def berth_plan(df, now):
     service, counts, window = stay_estimates()
     ships, berths, unfit = prepare(vessels, config.BERTHS, now, service)
     plan = plan_berths(ships, berths)
+    shown = {b["name"] for b in berths if b["free_from"]} | {p["berth"] for p in plan}
+    # One visible sentence under the chart; the model's details live in the title's help.
+    busy = sum(1 for b in berths if b["free_from"])
+    st.subheader("Proposed berth plan", help=(
+        f"The model minimizes the total wait over {len(berths)} known berths: {busy} busy now, "
+        f"{len(berths) - len(shown)} free ones without a proposal not shown.\n\n"
+        "Expected stays: " + ", ".join(
+            f"{c} {m // 60} h " + (
+                f"(median of {counts[c]} observed)"
+                if trusted_stay(counts[c], config.SERVICE_MINUTES[c], window, config.MIN_STAYS)
+                else f"(default: {counts[c]} of {config.MIN_STAYS} stays observed, "
+                     f"{window // 60} of {config.STAY_WINDOW_FACTOR * config.SERVICE_MINUTES[c] // 60} h "
+                     "of continuous collection)")
+            for c, m in service.items()) + ".\n\n"
+        "Vessels we did not see arrive are assumed halfway through their stay."))
     if not plan:
         st.write("No commercial vessel at anchor that fits a known berth.")
         return
-    shown = {b["name"] for b in berths if b["free_from"]} | {p["berth"] for p in plan}
     st.altair_chart(gantt(plan, [b for b in berths if b["name"] in shown], now, names), width="stretch")
     with st.expander("Proposed moorings as a table"):
         st.dataframe(pd.DataFrame([{
@@ -211,19 +224,8 @@ def berth_plan(df, now):
     if left_out:
         st.caption("Not planned, no known berth fits (some berth lengths are our estimates, so they can be "
                    "too short) or length unknown: " + ", ".join(left_out))
-    busy = sum(1 for b in berths if b["free_from"])
-    st.caption(f"A simple model's proposal: it minimizes the total wait over {len(berths)} known berths "
-               f"({busy} busy now, {len(berths) - len(shown)} free ones without a proposal not shown), from vessel "
-               "length and type only. Real waits also depend on weather, pilots and commercial reasons: tankers "
-               "often wait at anchor while a fitting berth is free. "
-               "Expected stays: " + ", ".join(
-                   f"{c} {m // 60} h " + (
-                       f"(median of {counts[c]} observed)"
-                       if trusted_stay(counts[c], config.SERVICE_MINUTES[c], window, config.MIN_STAYS)
-                       else f"(default: {counts[c]} of {config.MIN_STAYS} stays observed, "
-                            f"{window // 60} of {config.STAY_WINDOW_FACTOR * config.SERVICE_MINUTES[c] // 60} h "
-                            "of continuous collection)")
-                   for c, m in service.items()) + ". Vessels we did not see arrive are assumed halfway through their stay.")
+    st.caption("A simple model's proposal from vessel length and type only: real waits also depend on weather, "
+               "pilots and commercial reasons, and tankers often wait at anchor while a fitting berth is free.")
 
 
 def status_row(now):
