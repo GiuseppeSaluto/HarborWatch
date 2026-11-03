@@ -490,3 +490,18 @@ def test_prepare_moored_ship_without_free_berth_does_not_stop_later_ones():
     assert berths["OIL"]["occupied_by"] == 9
     assert berths["OIL"]["free_from"] > 0
     assert all(b.get("occupied_by") != 8 for b in berths.values())
+
+
+def test_prepare_every_returned_berth_has_free_from_zero_when_free():
+    # Spec section 13: every returned berth has `free_from`, 0 for a free berth.
+    # The input berths have no such key, so it must be added by prepare.
+    v = vessel(9, state="at_berth", lon=8.80, lat=44.40)
+    berths_in = [pberth("NEAR", 8.801, 44.40), pberth("FAR", 8.95, 44.40),
+                 pberth("OIL", 8.951, 44.40, categories=("tanker",))]
+    assert all("free_from" not in b for b in berths_in)
+    for vessels in ([v], []):
+        _, berths, _ = run_prepare(vessels, berths_in)
+        assert set(berths) == {"NEAR", "FAR", "OIL"}, vessels
+        assert all("free_from" in b for b in berths.values()), vessels
+        assert berths["FAR"]["free_from"] == 0, vessels
+        assert berths["OIL"]["free_from"] == 0, vessels
