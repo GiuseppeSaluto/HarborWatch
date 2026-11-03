@@ -42,6 +42,14 @@ When writing a test:
 
 The suite is checked with mutation testing (small bugs inserted into the code on purpose), so a test that catches none of them may be simplified or removed.
 
+```bash
+pip install mutmut
+(ulimit -v 4000000; mutmut run)   # memory cap: a mutant can turn a loop into an endless one
+mutmut results                    # mutants no test caught; `mutmut show NAME` for the diff
+```
+
+Survivors in the network and database code (`ingest.main`, `state_update`, the pipelines) are expected: the integration checks cover them, outside pytest.
+
 ## Pull requests
 
 - Describe the behaviour you changed and why, not only the code.

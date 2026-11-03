@@ -22,16 +22,16 @@ def fits(vessel, berth):
     return berth["length"] >= vessel["length"] and vessel["category"] in berth["categories"]
 
 
-def measure_stays(positions, max_gap_minutes=None):
+def measure_stays(positions):
     """Complete berth stays in a position history: {mmsi, start, end} for each.
 
     positions: dicts with mmsi, ts and state, in any order. A stay counts only if we saw the
-    vessel arrive and leave, with no gap over max_gap_minutes (default STALE_MINUTES) from
+    vessel arrive and leave, with no gap over STALE_MINUTES from
     the position before it to the one after it; end is the first position after the berth.
     Arrival and departure each need one more position beyond them to be final: the position
     before the arrival and the one after the departure may otherwise be uncorrected blips.
     """
-    gap = timedelta(minutes=config.STALE_MINUTES if max_gap_minutes is None else max_gap_minutes)
+    gap = timedelta(minutes=config.STALE_MINUTES)
     stays = []
     ordered = sorted(positions, key=lambda p: (p["mmsi"], p["ts"]))
     for mmsi, group in itertools.groupby(ordered, key=lambda p: p["mmsi"]):
@@ -82,21 +82,20 @@ def usable_stays(stays):
             if (s.get("length") or 0) >= config.MIN_STAY_VESSEL_M and s["minutes"] >= config.MIN_STAY_MINUTES]
 
 
-def service_minutes(stays, window_minutes=None, defaults=None, min_stays=None):
+def service_minutes(stays, window_minutes=None):
     """Expected stay per category, in whole minutes: the median of the usable stays where
     trusted_stay allows it, else the default.
 
     stays: dicts with category, length and minutes. window_minutes: the longest continuous
-    collection window in the history they come from. defaults and min_stays default to
-    config.SERVICE_MINUTES and config.MIN_STAYS. Returns a dict keyed like defaults.
+    collection window in the history they come from. Returns a dict keyed like
+    config.SERVICE_MINUTES.
     """
-    defaults = config.SERVICE_MINUTES if defaults is None else defaults
-    min_stays = config.MIN_STAYS if min_stays is None else min_stays
+    defaults = config.SERVICE_MINUTES
     minutes = {category: [] for category in defaults}
     for stay in usable_stays(stays):
         if stay["category"] in minutes:
             minutes[stay["category"]].append(stay["minutes"])
-    return {c: int(statistics.median(ms)) if trusted_stay(len(ms), defaults[c], window_minutes, min_stays)
+    return {c: int(statistics.median(ms)) if trusted_stay(len(ms), defaults[c], window_minutes, config.MIN_STAYS)
             else defaults[c] for c, ms in minutes.items()}
 
 

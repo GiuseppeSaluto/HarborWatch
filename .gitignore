@@ -11,3 +11,6 @@ anomalies.md
 .venv/
 __pycache__/
 .pytest_cache/
+
+# Mutation testing
+mutants/
