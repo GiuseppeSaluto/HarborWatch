@@ -488,3 +488,16 @@ def test_state_fields_state_is_classify_on_the_document_position():
         seen.add(expected)
     # The cases must really exercise different states, or the test proves little.
     assert {"underway", "at_berth", "anchored"} <= seen
+
+
+# --- positions: ts (spec section 13) ----------------------------------------------------------
+
+def test_position_ts_is_utc_aware_and_truncated_to_the_second():
+    # Spec section 13: ts is a timezone-aware UTC datetime from MetaData.time_utc,
+    # truncated to the second (spec example, nanoseconds dropped).
+    msg = position_msg()
+    msg["MetaData"]["time_utc"] = "2026-10-02 10:18:47.848845362 +0000 UTC"
+    ts = _doc(_parse(msg))["ts"]
+    assert ts.tzinfo is not None and ts.utcoffset() == timedelta(0)
+    assert ts == datetime(2026, 10, 2, 10, 18, 47, tzinfo=timezone.utc)
+    assert ts.microsecond == 0

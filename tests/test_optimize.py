@@ -4,6 +4,7 @@ Requires OR-Tools (CP-SAT), which plan_berths uses; no network or MongoDB.
 Times in plans are integer minutes from "now" (minute 0).
 """
 
+import copy
 import itertools
 from datetime import datetime, timedelta, timezone
 
@@ -428,3 +429,64 @@ def test_wait_equals_start_minus_arrival_for_every_ship():
         for s in ships:
             p = by[s["mmsi"]]
             assert p["wait"] == p["start"] - s["arrival"], (s, p)
+
+
+# --- prepare: points clarified on 2026-11-03 (spec section 13) -----------------------------
+
+
+def test_prepare_service_sets_anchored_duration_and_berthed_departure():
+    # Spec section 13: `service` (minutes per category) is used both for the
+    # duration of anchored ships and for the expected departure of moored ones.
+    service = {cat: minutes + 100 for cat, minutes in config.SERVICE_MINUTES.items()}
+    vs = [vessel(1), vessel(9, state="at_berth", since_minutes_ago=60, since_seen=True,
+                             lon=8.80, lat=44.40)]
+    bs = [pberth("A", 8.801, 44.40), pberth("B", 8.95, 44.40)]
+    waiting, out_berths, _ = optimize.prepare(vs, bs, NOW, service=service)
+    waiting = {_mmsi(w): w for w in waiting}
+    out_berths = {b["name"]: b for b in out_berths}
+    assert waiting[1]["duration"] == service["cargo"]
+    assert out_berths["A"]["free_from"] == service["cargo"] - 60
+
+
+def test_prepare_without_category_uses_ship_category_of_ship_type():
+    # Spec section 13: without `category` (or with an empty one) the category comes
+    # from ship_type: 70 is planned as cargo, 37 (pleasure) is in neither list.
+    # Both variants: a missing key and an empty string are distinct code paths.
+    for missing in ("absent", "empty"):
+        cargo, pleasure = vessel(1, ship_type=70), vessel(2, ship_type=37)
+        for v in (cargo, pleasure):
+            if missing == "absent":
+                del v["category"]
+            else:
+                v["category"] = ""
+        waiting, _, unfit = run_prepare([cargo, pleasure], [pberth("A", *GENOA)])
+        assert set(waiting) == {1}, missing
+        assert waiting[1]["category"] == "cargo", missing
+        assert 2 not in unfit, missing
+
+
+def test_prepare_returns_berth_copies_with_occupied_by_only_on_assigned_ones():
+    # Spec section 13: returned berths are copies (input unchanged); a berth taken
+    # by a moored ship has occupied_by = its mmsi, the others have no such key.
+    v = vessel(9, state="at_berth", lon=8.80, lat=44.40)
+    berths_in = [pberth("NEAR", 8.801, 44.40), pberth("FAR", 8.95, 44.40)]
+    before = copy.deepcopy(berths_in)
+    _, berths, _ = run_prepare([v], berths_in)
+    assert berths_in == before
+    assert berths["NEAR"]["occupied_by"] == 9
+    assert "occupied_by" not in berths["FAR"]
+
+
+def test_prepare_moored_ship_without_free_berth_does_not_stop_later_ones():
+    # Spec section 13: more moored ships than berths in a zone: the extra one
+    # occupies nothing and the moored ships after it are still assigned.
+    first = vessel(7, state="at_berth", lon=8.80, lat=44.40)
+    extra = vessel(8, state="at_berth", lon=8.80, lat=44.40)
+    later = vessel(9, state="at_berth", ship_type=80, lon=8.95, lat=44.40)
+    berths_in = [pberth("BOX", 8.801, 44.40, categories=("cargo",)),
+                 pberth("OIL", 8.951, 44.40, categories=("tanker",))]
+    _, berths, _ = run_prepare([first, extra, later], berths_in)
+    assert berths["BOX"]["occupied_by"] == 7
+    assert berths["OIL"]["occupied_by"] == 9
+    assert berths["OIL"]["free_from"] > 0
+    assert all(b.get("occupied_by") != 8 for b in berths.values())
