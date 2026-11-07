@@ -97,7 +97,7 @@ def dashboard():
     with right:
         anchorage_panel(anchored, unseen)
 
-    berth_plan(everyone, now)
+    berth_plan(berth_plan_data(everyone, now), now)
 
     st.caption(f"Updated {local(now):%H:%M:%S %Z} · vessels heard from in the last {config.STALE_MINUTES} min · "
                f"{hidden} other vessels hidden (tugs, yachts, service craft, or type not received yet) · "
@@ -177,8 +177,8 @@ def stay_estimates():
     return service_minutes(stays, window), counts, window
 
 
-def berth_plan(df, now):
-    """Phase 2: proposed berth and start time for every commercial vessel at anchor."""
+def berth_plan_data(df, now):
+    """Keep the vessel card and Gantt on the same solver result."""
     rows = df.astype(object).where(df.notna(), None)  # NaN (unknown length, name) -> None
     vessels = [{"mmsi": r["mmsi"], "state": r["state"], "category": r["type"], "length": r["length"],
                 "since": r["since"], "since_seen": r.get("since_seen") is True,  # missing (older documents) = not seen
@@ -188,6 +188,13 @@ def berth_plan(df, now):
     service, counts, window = stay_estimates()
     ships, berths, unfit = prepare(vessels, config.BERTHS, now, service)
     plan = plan_berths(ships, berths)
+    return dict(plan=plan, berths=berths, unfit=unfit, names=names, service=service, counts=counts, window=window)
+
+
+def berth_plan(data, now):
+    """Show the shared plan and explain which waiting vessels it left out."""
+    plan, berths, unfit, names = data["plan"], data["berths"], data["unfit"], data["names"]
+    service, counts, window = data["service"], data["counts"], data["window"]
     shown = {b["name"] for b in berths if b["free_from"]} | {p["berth"] for p in plan}
     # One visible sentence under the chart; the model's details live in the title's help.
     busy = sum(1 for b in berths if b["free_from"])
@@ -205,14 +212,14 @@ def berth_plan(df, now):
         "Vessels we did not see arrive are assumed halfway through their stay."))
     if not plan:
         st.write("No commercial vessel at anchor that fits a known berth.")
-        return
-    st.altair_chart(gantt(plan, [b for b in berths if b["name"] in shown], now, names), width="stretch")
-    with st.expander("Proposed moorings as a table"):
-        st.dataframe(pd.DataFrame([{
-            "vessel": names[p["mmsi"]], "berth": p["berth"],
-            "moors at": f"{local(now + timedelta(minutes=p['start'])):%a %H:%M %Z}",
-            "extra wait": fmt(timedelta(minutes=p["wait"])),
-        } for p in plan]), hide_index=True)
+    else:
+        st.altair_chart(gantt(plan, [b for b in berths if b["name"] in shown], now, names), width="stretch")
+        with st.expander("Proposed moorings as a table"):
+            st.dataframe(pd.DataFrame([{
+                "vessel": names[p["mmsi"]], "berth": p["berth"],
+                "moors at": f"{local(now + timedelta(minutes=p['start'])):%a %H:%M %Z}",
+                "extra wait": fmt(timedelta(minutes=p["wait"])),
+            } for p in plan]), hide_index=True)
     # Say who is left out instead of dropping them silently: a vessel longer than every berth
     # we know of in its category, or one whose length AIS has not told us yet.
     left_out = [f"{names[v['mmsi']]} ({v['category']}, " + (f"{v['length']:g} m" if v["length"] else "length unknown") + ")"
