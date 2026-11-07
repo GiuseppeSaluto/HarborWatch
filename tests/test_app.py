@@ -6,30 +6,40 @@ from streamlit.testing.v1 import AppTest
 
 
 @pytest.fixture
-def dashboard():
-    source = (Path(__file__).parents[1] / "src/app.py").read_text()
-    setup = '''
-def status_row(now):
-    return True
+def dashboard(monkeypatch):
+    from datetime import timedelta
 
-def load_states(db, now):
-    return pd.DataFrame([
-        dict(mmsi=i, state=state, ship_type=kind, name=str(i), length=150,
-             since=now, since_seen=True, ts=now, sog=0, lon=8.85, lat=44.4)
-        for i, state, kind in [(1, "at_berth", 70), (2, "anchored", 80),
-                               (3, "underway", 70), (4, "anchored", 36)]])
+    import pandas as pd
+    import streamlit as st
 
-def recent_tracks():
-    return ([dict(mmsi=i, paths=[[[8.85, 44.4], [8.86, 44.41]]]) for i in range(1, 5)],
-            {i: timedelta(minutes=10) for i in range(1, 5)})
+    import app
 
-get_db = lambda: None
-congestion_history = lambda: pd.DataFrame()
-def berth_plan(df, now):
-    st.session_state.planned = df.mmsi.tolist()
-dashboard()
-'''
-    return AppTest.from_string(source.replace("\ndashboard()\n", setup)).run()
+    def load_states(db, now):
+        return pd.DataFrame([
+            dict(mmsi=i, state=state, ship_type=kind, name=str(i), length=150,
+                 since=now, since_seen=True, ts=now, sog=0, lon=8.85, lat=44.4)
+            for i, state, kind in [(1, "at_berth", 70), (2, "anchored", 80),
+                                   (3, "underway", 70), (4, "anchored", 36)]])
+
+    def recent_tracks():
+        return ([dict(mmsi=i, paths=[[[8.85, 44.4], [8.86, 44.41]]]) for i in range(1, 5)],
+                {i: timedelta(minutes=10) for i in range(1, 5)})
+
+    def berth_plan(df, now):
+        st.session_state.planned = df.mmsi.tolist()
+
+    monkeypatch.setattr(app, "status_row", lambda now: True)
+    monkeypatch.setattr(app, "load_states", load_states)
+    monkeypatch.setattr(app, "recent_tracks", recent_tracks)
+    monkeypatch.setattr(app, "get_db", lambda: None)
+    monkeypatch.setattr(app, "congestion_history", lambda: pd.DataFrame())
+    monkeypatch.setattr(app, "berth_plan", berth_plan)
+
+    def render_dashboard():
+        import app
+        app.dashboard()
+
+    return AppTest.from_function(render_dashboard, default_timeout=15).run()
 
 
 def map_ids(app, layer):

@@ -48,10 +48,6 @@ def toggle_map_state(state):
     st.session_state[key] = not st.session_state.get(key, True)
 
 
-st.set_page_config(page_title="HarborWatch", page_icon=":material/anchor:", layout="wide")
-st.title("HarborWatch: Port of Genoa")
-
-
 @st.fragment(run_every="60s")  # reruns only this function, so the page doesn't flicker
 def dashboard():
     now = pd.Timestamp(datetime.now(UTC))
@@ -325,6 +321,9 @@ def recent_tracks():
     return vessel_tracks(positions, now), {m: last - first for m, (first, last) in spans.items()}
 
 
-st.html(header_grid_css())  # style only: st.html applies it without taking space on the page
-st.html(RUNNING_ICON_CSS)  # its own call: st.html keeps only the first <style> it is given
-dashboard()
+if __name__ == "__main__":
+    st.set_page_config(page_title="HarborWatch", page_icon=":material/anchor:", layout="wide")
+    st.title("HarborWatch: Port of Genoa")
+    st.html(header_grid_css())  # style only: st.html applies it without taking space on the page
+    st.html(RUNNING_ICON_CSS)  # its own call: st.html keeps only the first <style> it is given
+    dashboard()
