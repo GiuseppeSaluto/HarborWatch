@@ -66,6 +66,7 @@ def port_map(df, tracks_and_spans):
     c = colors()
     known = lambda v, unit="": "?" if pd.isna(v) else f"{v:g}{unit}"
     vessels = pd.DataFrame({
+        "mmsi": df["mmsi"],
         "position": df[["lon", "lat"]].values.tolist(),
         "color": df["state"].map(lambda s: rgb(c[s])),
         "icon": df["type"].map(vessel_icon),
@@ -101,29 +102,31 @@ def port_map(df, tracks_and_spans):
     ink = [255, 255, 255] if st.context.theme.type == "dark" else [11, 11, 11]
     return pdk.Deck(
         map_style=None,  # Streamlit's basemap, light or dark with the theme
+        # "It is not down on any map; true places never are."
+        # Herman Melville, Moby-Dick, Ch. 12
         initial_view_state=pdk.ViewState(latitude=44.405, longitude=8.85, zoom=11.3),
         tooltip={"html": "<b>{title}</b><br>{line1}<br>{line2}"},
         layers=[
             # A faint fill makes the whole ring hoverable: deck.gl only picks drawn pixels, so an
             # outline alone would need the pointer exactly on its 1.5 px line.
-            pdk.Layer("ScatterplotLayer", areas, get_position="position", get_radius=220, filled=True,
+            pdk.Layer("ScatterplotLayer", areas, id="berth-areas", get_position="position", get_radius=220, filled=True,
                       get_fill_color=ink + [30], stroked=True, get_line_color=ink, line_width_min_pixels=1.5,
                       pickable=True),
-            pdk.Layer("TextLayer", labeled, get_position="position", get_text="name", get_size=13,
+            pdk.Layer("TextLayer", labeled, id="berth-labels", get_position="position", get_text="name", get_size=13,
                       get_color=ink, get_pixel_offset=[0, -20]),
             # Under the dots, so a vessel's dot stays on top of its own path.
             # Dashed: a track joins sampled positions, it is not the exact route sailed.
-            pdk.Layer("PathLayer", paths, get_path="path", get_color="color", get_width=2,
+            pdk.Layer("PathLayer", paths, id="vessel-tracks", get_path="path", get_color="color", get_width=2,
                       width_min_pixels=2, opacity=0.7, pickable=True,
                       extensions=[{"@@type": "PathStyleExtension", "dash": True}], get_dash_array=[4, 3],
                       dash_justified=True),
             # Surface-colored halo keeps overlapping icons apart (moored ships sit side by side).
             # Quoted: pydeck turns a bare string into a JavaScript expression ("pixels" = an undefined variable).
-            pdk.Layer("ScatterplotLayer", vessels, get_position="position", get_fill_color=rgb(c["surface"]) + [200],
+            pdk.Layer("ScatterplotLayer", vessels, id="vessel-halos", get_position="position", get_fill_color=rgb(c["surface"]) + [200],
                       get_radius=11, radius_units="'pixels'"),
             # Shape = category, color = state; 20 px whatever the zoom (IconLayer sizes are in pixels by
             # default), so the anchorage stays readable at zoom 11.
-            pdk.Layer("IconLayer", vessels, get_position="position", get_icon="icon", get_color="color",
+            pdk.Layer("IconLayer", vessels, id="vessels", get_position="position", get_icon="icon", get_color="color",
                       get_size=20, pickable=True),
         ],
     )

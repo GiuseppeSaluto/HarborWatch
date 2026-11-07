@@ -76,3 +76,16 @@ def state_card_css():
             f"{card} button p {{position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);}}"
         )
     return css + "</style>"
+
+
+def vessel_detail_css(state):
+    c = colors()
+    accent = c.get(state, c["underway"])
+    return f"""<style>
+    .st-key-vessel-detail {{border-top: 3px solid {accent};}}
+    .st-key-vessel-detail [data-testid=stMetricValue] {{font-size: 1.4rem; font-variant-numeric: tabular-nums;}}
+    .st-key-vessel-detail [data-testid=stMetricLabel] {{font-size: .8rem;}}
+    .st-key-vessel-detail h3 {{padding-top: 0; letter-spacing: -.025em;}}
+    .st-key-vessel-detail [data-testid=stVerticalBlock] {{gap: .5rem;}}
+    .st-key-vessel-detail [data-testid=stAlert] {{font-size: .85rem;}}
+    </style>"""

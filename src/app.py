@@ -15,6 +15,7 @@ from classify import COMMERCIAL, ship_category
 from diagnostics import diagnose, probe_stream
 from history import continuous_hours, hourly_series, longest_run, vessel_tracks
 from optimize import plan_berths, prepare, service_minutes, trusted_stay, usable_stays
+from app_vessel import select_map_vessel, vessel_card
 
 
 @st.cache_resource
@@ -89,19 +90,32 @@ def dashboard():
     mapped = df[df["state"].isin(visible_states)]
     left, right = st.columns([2, 1], gap="medium")
     with left:
-        st.pydeck_chart(port_map(mapped, recent_tracks() if show_tracks else ([], {})), height=560)
+        st.session_state["mapped-mmsis"] = mapped["mmsi"].tolist()
+        st.pydeck_chart(port_map(mapped, recent_tracks() if show_tracks else ([], {})), height=560,
+                        key="port-map", on_select=select_map_vessel, selection_mode="single-object")
         if not visible_states:
             st.caption("All vessel states hidden. Select a card to show vessels.")
         st.caption(legend(mapped) + f" · dashed lines: last {config.TRACK_HOURS} h · circles: berth areas · "
-                   "hover for details", unsafe_allow_html=True)
+                   "hover for a summary · click a vessel to open its details below", unsafe_allow_html=True)
     with right:
         anchorage_panel(anchored, unseen)
 
-    berth_plan(berth_plan_data(everyone, now), now)
+    data = berth_plan_data(everyone, now)
+    vessel_card(everyone, now, vessel_history, data["plan"])
+    berth_plan(data, now)
 
     st.caption(f"Updated {local(now):%H:%M:%S %Z} · vessels heard from in the last {config.STALE_MINUTES} min · "
                f"{hidden} other vessels hidden (tugs, yachts, service craft, or type not received yet) · "
                "map © OpenStreetMap contributors")
+
+
+@st.cache_data(ttl=60)
+def vessel_history(mmsi, hours):
+    """Use the (mmsi, ts) index instead of loading the whole port history."""
+    now = datetime.now(UTC)
+    return list(get_db().positions.find(
+        {"mmsi": mmsi, "ts": {"$gte": now - timedelta(hours=hours), "$lte": now}},
+        {"_id": 0, "ts": 1, "state": 1, "location": 1}).sort("ts", 1))
 
 
 def state_cards(counts, anchored, unseen):
