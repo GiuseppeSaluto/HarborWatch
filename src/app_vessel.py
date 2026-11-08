@@ -8,7 +8,8 @@ import streamlit as st
 import config
 from app_charts import fmt, fmt_age, local, port_map, vessel_name
 from app_theme import LABELS, vessel_detail_css
-from vessel_details import observations, plan_reason
+from history import observations
+from optimize import plan_reason
 
 
 def select_map_vessel():
@@ -73,7 +74,8 @@ def vessel_card(df, now, history_loader, plan=()):
                     berth_cols[0].metric("Proposed mooring", f"{moors:%H:%M}", help=f"{moors:%a %d %b %H:%M %Z}")
                     berth_cols[1].metric("Extra wait", fmt(timedelta(minutes=proposal["wait"])))
                 else:
-                    st.info(plan_reason({**v, "category": v["type"]}, config.BERTHS), icon=":material/anchor:")
+                    reason = plan_reason({**v, "category": v["type"]}, config.BERTHS)
+                    st.info(reason or "Eligible for the berth plan.", icon=":material/anchor:")
             with right:
                 hours = st.radio("Route history", [3, 24, 7 * 24], horizontal=True,
                                  format_func=lambda h: "7 days" if h == 168 else f"{h} hours", key="detail-hours")
