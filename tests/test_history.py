@@ -673,3 +673,35 @@ def test_observations_on_bundled_recording_preserve_data_gaps():
         assert events[0]["kind"] == "First observed"
         assert all(len(path) > 1 for path in paths)
         assert all(e["ts"] in {p["ts"] for p in positions} for e in events)
+
+
+def test_gap_one_second_over_stale_minutes_splits_the_route():
+    gap = config.STALE_MINUTES + 1 / 60
+    paths, events = history.observations([
+        position(0, "anchored"), position(1, "anchored", 8.86),
+        position(1 + gap, "anchored", 8.87), position(2 + gap, "anchored", 8.88)])
+    assert paths == [[[8.85, 44.4], [8.86, 44.4]], [[8.87, 44.4], [8.88, 44.4]]]
+    assert [e["kind"] for e in events] == ["First observed", "Seen after data gap"]
+
+
+def test_position_after_gap_has_exactly_one_event_whatever_the_state():
+    gap = config.STALE_MINUTES + 1
+    for later in ("anchored", "at_berth"):
+        _, events = history.observations([position(0, "anchored"), position(gap, later)])
+        after = [e for e in events if e["ts"] == OBSERVED_NOW + timedelta(minutes=gap)]
+        assert [(e["kind"], e["state"]) for e in after] == [("Seen after data gap", later)], later
+
+
+def test_trailing_single_position_segment_is_dropped_but_still_observed():
+    gap = config.STALE_MINUTES + 1
+    paths, events = history.observations([
+        position(0, "anchored"), position(1, "anchored", 8.86), position(1 + gap, "anchored", 8.9)])
+    assert paths == [[[8.85, 44.4], [8.86, 44.4]]]
+    assert events[-1]["kind"] == "Seen after data gap"
+
+
+def test_position_without_state_key_is_accepted():
+    first = position(0, None)
+    del first["state"]
+    _, events = history.observations([position(1, "anchored"), first])
+    assert [e["kind"] for e in events] == ["First observed", "First state observed"]

@@ -516,3 +516,98 @@ def test_exclusion_reasons_and_eligibility():
     assert "category" in optimize.plan_reason(vessel, [{**berth, "categories": ["tanker"]}])
     assert "commercial" in optimize.plan_reason({**vessel, "category": "pleasure"}, [berth])
     assert "at anchor" in optimize.plan_reason({**vessel, "state": "at_berth"}, [berth])
+
+
+# --- plan_reason (spec section 13) -----------------------------------------------------
+# The five checks, each failed alone by changing one thing of a plannable cargo ship.
+PLANNABLE = dict(category="cargo", state="anchored", length=150)
+CARGO_BERTHS = [pberth("BOX", *GENOA, length=300, categories=("cargo",))]
+SHORT_TANKER_BERTHS = [pberth("OIL", *GENOA, length=100, categories=("tanker",))]
+SHORT_CARGO_BERTHS = [pberth("BOX", *GENOA, length=100, categories=("cargo",))]
+
+
+def single_failures():
+    """Reason for each check failed alone, in the spec's order."""
+    return [
+        optimize.plan_reason({**PLANNABLE, "category": "pleasure"}, CARGO_BERTHS),
+        optimize.plan_reason({**PLANNABLE, "state": "at_berth"}, CARGO_BERTHS),
+        optimize.plan_reason({**PLANNABLE, "length": None}, CARGO_BERTHS),
+        optimize.plan_reason(PLANNABLE, [pberth("OIL", *GENOA, categories=("tanker",))]),
+        optimize.plan_reason(PLANNABLE, SHORT_CARGO_BERTHS),
+    ]
+
+
+def test_plan_reason_texts_start_with_not_planned_and_are_all_different():
+    reasons = single_failures()
+    assert all(r is not None and r.startswith("Not planned:") for r in reasons), reasons
+    assert len(set(reasons)) == len(reasons), reasons
+
+
+def test_plan_reason_gives_the_first_failing_check_in_spec_order():
+    reasons = single_failures()
+    # A vessel failing check k and every later one gets the reason of check k.
+    # The berths hold one short tanker berth: no category match and nothing long enough.
+    failing_from = [
+        {"category": "pleasure", "state": "at_berth", "length": None},
+        {"state": "at_berth", "length": None},
+        {"length": None},
+        {},
+    ]
+    for k, changes in enumerate(failing_from):
+        got = optimize.plan_reason({**PLANNABLE, **changes}, SHORT_TANKER_BERTHS)
+        assert got == reasons[k], (k, changes, got)
+
+
+def test_plan_reason_length_counts_only_berths_of_the_category():
+    # A long tanker berth does not make a cargo ship fit the short cargo berth.
+    berths = SHORT_CARGO_BERTHS + [pberth("OIL", *GENOA, length=400, categories=("tanker",))]
+    assert optimize.plan_reason(PLANNABLE, berths) == single_failures()[4]
+
+
+def test_plan_reason_length_zero_is_unknown():
+    unknown = optimize.plan_reason({**PLANNABLE, "length": None}, CARGO_BERTHS)
+    assert optimize.plan_reason({**PLANNABLE, "length": 0}, CARGO_BERTHS) == unknown
+
+
+def test_prepare_ships_are_exactly_those_plan_reason_accepts():
+    berths = [pberth("BOX", 8.90, 44.40, length=300, categories=("cargo",)),
+              pberth("OIL", 8.95, 44.40, length=250, categories=("tanker",))]
+    vessels = [
+        vessel(1),                                   # plannable
+        vessel(2, ship_type=80, length=240),         # plannable tanker
+        vessel(3, length=0),                         # length unknown
+        vessel(4, length=None),                      # length unknown
+        vessel(5, length=350),                       # too long for the cargo berth
+        vessel(6, ship_type=60, length=200),         # passenger: no berth takes it
+        vessel(7, ship_type=37),                     # not commercial
+        vessel(8, state="underway"),                 # not anchored
+        vessel(9, state="at_berth", since_minutes_ago=10),  # occupies BOX, not planned
+        vessel(10, ship_type=80, length=260),        # tanker too long
+    ]
+    waiting, _, _ = run_prepare(vessels, berths)
+    accepted = {v["mmsi"] for v in vessels if optimize.plan_reason(v, berths) is None}
+    assert accepted == {1, 2}  # BOX occupied by vessel 9 does not exclude vessel 1
+    assert set(waiting) == accepted
+
+
+def test_prepare_given_category_is_used_as_is_without_recomputing():
+    oil = [pberth("OIL", *GENOA, categories=("tanker",))]
+    only_category = vessel(1, ship_type=80)
+    del only_category["ship_type"]
+    # ship_type 70 would give cargo: the given category must win.
+    conflicting = {**vessel(2, ship_type=70), "category": "tanker"}
+    for v in (only_category, conflicting):
+        waiting, _, unfit = run_prepare([v], oil)
+        assert set(waiting) == {v["mmsi"]} and not unfit, v
+        assert waiting[v["mmsi"]]["duration"] == config.SERVICE_MINUTES["tanker"], v
+
+
+def test_prepare_moored_ship_of_unknown_length_occupies_no_berth():
+    for length in (None, 0):
+        moored = vessel(1, state="at_berth", length=length, since_minutes_ago=10)
+        later = vessel(2, state="at_berth", since_minutes_ago=10)
+        _, berths, _ = run_prepare([moored], [pberth("A", *GENOA)])
+        assert "occupied_by" not in berths["A"] and berths["A"]["free_from"] == 0, length
+        # The berth stays free for the next moored ship in the given order.
+        _, berths, _ = run_prepare([moored, later], [pberth("A", *GENOA)])
+        assert berths["A"]["occupied_by"] == 2, length

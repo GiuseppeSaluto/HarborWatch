@@ -204,3 +204,34 @@ def test_empty_plan_still_explains_excluded_vessels(run_snippet):
     app = run_snippet(render)
     assert not app.exception
     assert any("Unknown length" in c.value and "length unknown" in c.value for c in app.caption)
+
+
+def card_texts(app):
+    return [e.value for kind in ("info", "caption", "markdown", "warning", "error", "success")
+            for e in getattr(app, kind)]
+
+
+def test_vessel_card_shows_plan_reason_for_vessel_outside_the_plan(dashboard):
+    import config
+    import optimize
+
+    dashboard.selectbox(key="detail-mmsi").select(1).run()
+    assert not dashboard.exception
+    reason = optimize.plan_reason(dict(category="cargo", state="at_berth", length=150),
+                                  config.BERTHS)
+    assert reason is not None
+    assert any(reason in text for text in card_texts(dashboard))
+
+
+def test_selection_resets_when_vessel_is_no_longer_visible(dashboard, monkeypatch):
+    import app
+
+    dashboard.selectbox(key="detail-mmsi").select(2).run()
+    assert dashboard.selectbox(key="detail-mmsi").value == 2
+    load_states = app.load_states
+    monkeypatch.setattr(app, "load_states",
+                        lambda db, now: load_states(db, now).query("mmsi != 2"))
+    dashboard.run()
+    assert not dashboard.exception
+    assert dashboard.selectbox(key="detail-mmsi").value is None
+    assert not any(h.value == "2" for h in dashboard.subheader)
