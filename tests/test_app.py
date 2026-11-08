@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -82,12 +81,21 @@ def test_all_states_can_be_hidden(dashboard):
     assert map_ids(dashboard, "IconLayer") == set()
     assert map_ids(dashboard, "PathLayer") == set()
 
+@pytest.fixture
+def run_snippet(monkeypatch):
+    """Run a renderer through the same patched entry point as the dashboard tests."""
+    import app
 
+    def run(render):
+        monkeypatch.setattr(app, "dashboard", render)
 
-def run_snippet(setup):
-    """Exercise the real renderers with local fixtures, without live services."""
-    source = (Path(__file__).parents[1] / "src/app.py").read_text()
-    return AppTest.from_string(source.replace("\n    dashboard()\n", setup), default_timeout=15).run()
+        def render_dashboard():
+            import app
+            app.dashboard()
+
+        return AppTest.from_function(render_dashboard, default_timeout=15).run()
+
+    return run
 
 
 def click_map(dashboard, picked):
@@ -123,15 +131,23 @@ def test_vessel_card_includes_noncommercial_vessels(dashboard):
     assert any("only commercial vessels" in c.value for c in dashboard.info)
 
 
-def test_missing_vessel_fields_and_empty_history_stay_unknown():
-    app = run_snippet("""
-vessel_history = lambda mmsi, hours: []
-now = pd.Timestamp(datetime.now(UTC))
-st.session_state['detail-mmsi'] = 1
-vessel_card(pd.DataFrame([dict(mmsi=1, state='anchored', type='cargo', name=None,
-    destination=None, length=None, since=now - timedelta(hours=2), since_seen=False,
-    ts=now - timedelta(minutes=5), sog=None, lon=8.85, lat=44.4)]), now, vessel_history)
-""")
+def test_missing_vessel_fields_and_empty_history_stay_unknown(run_snippet):
+    def render():
+        from datetime import UTC, datetime, timedelta
+
+        import pandas as pd
+        import streamlit as st
+
+        from app import vessel_card
+
+        vessel_history = lambda mmsi, hours: []
+        now = pd.Timestamp(datetime.now(UTC))
+        st.session_state['detail-mmsi'] = 1
+        vessel_card(pd.DataFrame([dict(mmsi=1, state='anchored', type='cargo', name=None,
+            destination=None, length=None, since=now - timedelta(hours=2), since_seen=False,
+            ts=now - timedelta(minutes=5), sog=None, lon=8.85, lat=44.4)]), now, vessel_history)
+
+    app = run_snippet(render)
     assert not app.exception
     assert app.metric[1].value.startswith("≥")
     assert any(m.label == "Speed" and m.value == "Unknown" for m in app.metric)
@@ -171,12 +187,20 @@ def test_non_vessel_or_stale_map_selection_preserves_card(dashboard, picked):
     assert dashboard.selectbox(key="detail-mmsi").value == 3
 
 
-def test_empty_plan_still_explains_excluded_vessels():
-    app = run_snippet("""
-now = pd.Timestamp(datetime.now(UTC))
-berth_plan(dict(plan=[], berths=[], unfit=[dict(mmsi=1, category='cargo', length=None)],
-    names={1: 'Unknown length'}, service=config.SERVICE_MINUTES,
-    counts={c: 0 for c in config.SERVICE_MINUTES}, window=0), now)
-""")
+def test_empty_plan_still_explains_excluded_vessels(run_snippet):
+    def render():
+        from datetime import UTC, datetime
+
+        import pandas as pd
+
+        import config
+        from app import berth_plan
+
+        now = pd.Timestamp(datetime.now(UTC))
+        berth_plan(dict(plan=[], berths=[], unfit=[dict(mmsi=1, category='cargo', length=None)],
+            names={1: 'Unknown length'}, service=config.SERVICE_MINUTES,
+            counts={c: 0 for c in config.SERVICE_MINUTES}, window=0), now)
+
+    app = run_snippet(render)
     assert not app.exception
     assert any("Unknown length" in c.value and "length unknown" in c.value for c in app.caption)
