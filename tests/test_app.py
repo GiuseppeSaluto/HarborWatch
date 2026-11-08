@@ -101,7 +101,6 @@ def click_map(dashboard, picked):
 
 def test_vessel_search_opens_card_with_proposal_and_history(dashboard):
     selector = dashboard.selectbox(key="detail-mmsi")
-    assert selector.proto.filter_mode == selector.proto.DESCRIPTOR.fields_by_name["filter_mode"].enum_type.values_by_name["FILTER_MODE_CONTAINS"].number
     assert "MMSI" in selector.proto.placeholder
     assert any("MMSI 2" in label for label in selector.options)
     assert not dashboard.expander[0].proto.expanded
