@@ -32,17 +32,6 @@ def test_empty_history():
     assert details.observations([]) == ([], [])
 
 
-def test_exclusion_reasons_and_eligibility():
-    berth = dict(length=200, categories=["cargo"])
-    vessel = dict(state="anchored", category="cargo", length=150)
-    assert details.plan_reason(vessel, [berth]) == "Eligible for the berth plan."
-    assert "length unknown" in details.plan_reason({**vessel, "length": None}, [berth])
-    assert "long enough" in details.plan_reason({**vessel, "length": 250}, [berth])
-    assert "category" in details.plan_reason(vessel, [{**berth, "categories": ["tanker"]}])
-    assert "commercial" in details.plan_reason({**vessel, "category": "pleasure"}, [berth])
-    assert "at anchor" in details.plan_reason({**vessel, "state": "at_berth"}, [berth])
-
-
 def test_missing_old_state_does_not_claim_an_observed_transition():
     _, events = details.observations([position(0, None), position(1, 'anchored')])
     assert events[1]['kind'] == 'First state observed'

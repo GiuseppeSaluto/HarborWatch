@@ -505,3 +505,14 @@ def test_prepare_every_returned_berth_has_free_from_zero_when_free():
         assert all("free_from" in b for b in berths.values()), vessels
         assert berths["FAR"]["free_from"] == 0, vessels
         assert berths["OIL"]["free_from"] == 0, vessels
+
+
+def test_exclusion_reasons_and_eligibility():
+    berth = dict(length=200, categories=["cargo"])
+    vessel = dict(state="anchored", category="cargo", length=150)
+    assert optimize.plan_reason(vessel, [berth]) is None
+    assert "length unknown" in optimize.plan_reason({**vessel, "length": None}, [berth])
+    assert "long enough" in optimize.plan_reason({**vessel, "length": 250}, [berth])
+    assert "category" in optimize.plan_reason(vessel, [{**berth, "categories": ["tanker"]}])
+    assert "commercial" in optimize.plan_reason({**vessel, "category": "pleasure"}, [berth])
+    assert "at anchor" in optimize.plan_reason({**vessel, "state": "at_berth"}, [berth])
