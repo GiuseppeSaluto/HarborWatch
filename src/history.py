@@ -91,6 +91,38 @@ def vessel_tracks(positions, now):
     return tracks
 
 
+def observations(positions):
+    """Build routes and state events from sampled AIS positions.
+
+    A return after a gap is a new sighting, not evidence of when the state
+    changed. A lone position has no route; the map still shows its marker.
+    """
+    paths, events, path = [], [], []
+    previous = None
+    for fix in sorted(positions, key=lambda p: p["ts"]):
+        gap = previous is not None and fix["ts"] - previous["ts"] > timedelta(minutes=config.STALE_MINUTES)
+        if gap:
+            if len(path) > 1:
+                paths.append(path)
+            path = []
+        path.append(fix["location"]["coordinates"])
+        state, before = fix.get("state"), previous and previous.get("state")
+        if previous is None:
+            kind = "First observed"
+        elif gap:
+            kind = "Seen after data gap"
+        elif state != before:
+            kind = "First state observed" if before is None else "State change observed"
+        else:
+            kind = None
+        if kind:
+            events.append({"ts": fix["ts"], "state": state, "kind": kind})
+        previous = fix
+    if len(path) > 1:
+        paths.append(path)
+    return paths, events
+
+
 def stays_pipeline(max_gap_minutes):
     """measure_stays as a MongoDB aggregation on positions: only the stays leave the server.
 
