@@ -40,16 +40,7 @@ def observations(positions):
 
 
 def plan_reason(vessel, berths):
-    """Use the planner's rules so the explanation agrees with the actual plan."""
-    if vessel["category"] not in COMMERCIAL:
-        return "Not planned: only commercial vessels are included in the berth plan."
-    if vessel["state"] != "anchored":
-        return "Not planned: only vessels currently at anchor need a berth assignment."
-    if not vessel.get("length"):
-        return "Not planned: vessel length unknown; compatibility cannot be checked."
-    accepted = [b for b in berths if vessel["category"] in b["categories"]]
-    if not accepted:
-        return "Not planned: no known berth accepts this vessel category."
-    if not any(fits(vessel, b) for b in accepted):
-        return "Not planned: no known berth accepting this category is long enough. Berth lengths may be estimates."
-    return "Eligible for the berth plan."
+    """Keep the card's explanation while eligibility moves into the planner."""
+    from optimize import plan_reason as exclusion_reason
+
+    return exclusion_reason(vessel, berths) or "Eligible for the berth plan."

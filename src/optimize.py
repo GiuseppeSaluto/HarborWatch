@@ -22,6 +22,22 @@ def fits(vessel, berth):
     return berth["length"] >= vessel["length"] and vessel["category"] in berth["categories"]
 
 
+def plan_reason(vessel, berths):
+    """Why a vessel is excluded from the berth plan, or None when eligible."""
+    if vessel["category"] not in COMMERCIAL:
+        return "Not planned: only commercial vessels are included in the berth plan."
+    if vessel["state"] != "anchored":
+        return "Not planned: only vessels currently at anchor need a berth assignment."
+    if not vessel.get("length"):
+        return "Not planned: vessel length unknown; compatibility cannot be checked."
+    accepted = [b for b in berths if vessel["category"] in b["categories"]]
+    if not accepted:
+        return "Not planned: no known berth accepts this vessel category."
+    if not any(fits(vessel, b) for b in accepted):
+        return "Not planned: no known berth accepting this category is long enough. Berth lengths may be estimates."
+    return None
+
+
 def measure_stays(positions):
     """Complete berth stays in a position history: {mmsi, start, end} for each.
 
