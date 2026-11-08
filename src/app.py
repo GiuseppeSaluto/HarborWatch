@@ -15,6 +15,7 @@ from classify import COMMERCIAL, ship_category
 from diagnostics import diagnose, probe_stream
 from history import continuous_hours, hourly_series, longest_run, vessel_tracks
 from optimize import plan_berths, prepare, service_minutes, trusted_stay, usable_stays
+from app_vessel import select_map_vessel, vessel_card
 
 
 @st.cache_resource
@@ -46,10 +47,6 @@ def load_states(db, now):
 def toggle_map_state(state):
     key = f"show_{state}"
     st.session_state[key] = not st.session_state.get(key, True)
-
-
-st.set_page_config(page_title="HarborWatch", page_icon=":material/anchor:", layout="wide")
-st.title("HarborWatch: Port of Genoa")
 
 
 @st.fragment(run_every="60s")  # reruns only this function, so the page doesn't flicker
@@ -93,19 +90,32 @@ def dashboard():
     mapped = df[df["state"].isin(visible_states)]
     left, right = st.columns([2, 1], gap="medium")
     with left:
-        st.pydeck_chart(port_map(mapped, recent_tracks() if show_tracks else ([], {})), height=560)
+        st.session_state["mapped-mmsis"] = mapped["mmsi"].tolist()
+        st.pydeck_chart(port_map(mapped, recent_tracks() if show_tracks else ([], {})), height=560,
+                        key="port-map", on_select=select_map_vessel, selection_mode="single-object")
         if not visible_states:
             st.caption("All vessel states hidden. Select a card to show vessels.")
         st.caption(legend(mapped) + f" · dashed lines: last {config.TRACK_HOURS} h · circles: berth areas · "
-                   "hover for details", unsafe_allow_html=True)
+                   "hover for a summary · click a vessel to open its details below", unsafe_allow_html=True)
     with right:
         anchorage_panel(anchored, unseen)
 
-    berth_plan(everyone, now)
+    data = berth_plan_data(everyone, now)
+    vessel_card(everyone, now, vessel_history, data["plan"])
+    berth_plan(data, now)
 
     st.caption(f"Updated {local(now):%H:%M:%S %Z} · vessels heard from in the last {config.STALE_MINUTES} min · "
                f"{hidden} other vessels hidden (tugs, yachts, service craft, or type not received yet) · "
                "map © OpenStreetMap contributors")
+
+
+@st.cache_data(ttl=60)
+def vessel_history(mmsi, hours):
+    """Use the (mmsi, ts) index instead of loading the whole port history."""
+    now = datetime.now(UTC)
+    return list(get_db().positions.find(
+        {"mmsi": mmsi, "ts": {"$gte": now - timedelta(hours=hours), "$lte": now}},
+        {"_id": 0, "ts": 1, "state": 1, "location": 1}).sort("ts", 1))
 
 
 def state_cards(counts, anchored, unseen):
@@ -181,8 +191,8 @@ def stay_estimates():
     return service_minutes(stays, window), counts, window
 
 
-def berth_plan(df, now):
-    """Phase 2: proposed berth and start time for every commercial vessel at anchor."""
+def berth_plan_data(df, now):
+    """Keep the vessel card and Gantt on the same solver result."""
     rows = df.astype(object).where(df.notna(), None)  # NaN (unknown length, name) -> None
     vessels = [{"mmsi": r["mmsi"], "state": r["state"], "category": r["type"], "length": r["length"],
                 "since": r["since"], "since_seen": r.get("since_seen") is True,  # missing (older documents) = not seen
@@ -192,6 +202,13 @@ def berth_plan(df, now):
     service, counts, window = stay_estimates()
     ships, berths, unfit = prepare(vessels, config.BERTHS, now, service)
     plan = plan_berths(ships, berths)
+    return dict(plan=plan, berths=berths, unfit=unfit, names=names, service=service, counts=counts, window=window)
+
+
+def berth_plan(data, now):
+    """Show the shared plan and explain which waiting vessels it left out."""
+    plan, berths, unfit, names = data["plan"], data["berths"], data["unfit"], data["names"]
+    service, counts, window = data["service"], data["counts"], data["window"]
     shown = {b["name"] for b in berths if b["free_from"]} | {p["berth"] for p in plan}
     # One visible sentence under the chart; the model's details live in the title's help.
     busy = sum(1 for b in berths if b["free_from"])
@@ -209,14 +226,14 @@ def berth_plan(df, now):
         "Vessels we did not see arrive are assumed halfway through their stay."))
     if not plan:
         st.write("No commercial vessel at anchor that fits a known berth.")
-        return
-    st.altair_chart(gantt(plan, [b for b in berths if b["name"] in shown], now, names), width="stretch")
-    with st.expander("Proposed moorings as a table"):
-        st.dataframe(pd.DataFrame([{
-            "vessel": names[p["mmsi"]], "berth": p["berth"],
-            "moors at": f"{local(now + timedelta(minutes=p['start'])):%a %H:%M %Z}",
-            "extra wait": fmt(timedelta(minutes=p["wait"])),
-        } for p in plan]), hide_index=True)
+    else:
+        st.altair_chart(gantt(plan, [b for b in berths if b["name"] in shown], now, names), width="stretch")
+        with st.expander("Proposed moorings as a table"):
+            st.dataframe(pd.DataFrame([{
+                "vessel": names[p["mmsi"]], "berth": p["berth"],
+                "moors at": f"{local(now + timedelta(minutes=p['start'])):%a %H:%M %Z}",
+                "extra wait": fmt(timedelta(minutes=p["wait"])),
+            } for p in plan]), hide_index=True)
     # Say who is left out instead of dropping them silently: a vessel longer than every berth
     # we know of in its category, or one whose length AIS has not told us yet.
     left_out = [f"{names[v['mmsi']]} ({v['category']}, " + (f"{v['length']:g} m" if v["length"] else "length unknown") + ")"
@@ -325,6 +342,9 @@ def recent_tracks():
     return vessel_tracks(positions, now), {m: last - first for m, (first, last) in spans.items()}
 
 
-st.html(header_grid_css())  # style only: st.html applies it without taking space on the page
-st.html(RUNNING_ICON_CSS)  # its own call: st.html keeps only the first <style> it is given
-dashboard()
+if __name__ == "__main__":
+    st.set_page_config(page_title="HarborWatch", page_icon=":material/anchor:", layout="wide")
+    st.title("HarborWatch: Port of Genoa")
+    st.html(header_grid_css())  # style only: st.html applies it without taking space on the page
+    st.html(RUNNING_ICON_CSS)  # its own call: st.html keeps only the first <style> it is given
+    dashboard()

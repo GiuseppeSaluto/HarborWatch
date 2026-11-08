@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import config
 import history
 
 H0 = datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc)
@@ -215,7 +216,6 @@ def test_cargo_window_threshold_in_hours(hours, enough):
 # Window edges (ts exactly now - TRACK_HOURS, or exactly now) are left
 # untested because the spec does not say whether they are inclusive.
 
-import config  # noqa: E402
 
 NOW = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
 LON0, LAT0 = 8.90, 44.40
@@ -608,3 +608,68 @@ def test_alone_is_false_when_the_only_neighbour_with_data_is_a_series_edge():
     # Mirrored: h1's only neighbour with data is h0, the first hour of the series.
     r = rows([0, 1, 3])
     assert [r[hour(n)]["alone"] for n in (0, 1, 3)] == [False, False, True]
+
+
+OBSERVED_NOW = datetime(2026, 11, 7, tzinfo=timezone.utc)
+
+
+def position(minutes, state, lon=8.85):
+    return dict(ts=OBSERVED_NOW + timedelta(minutes=minutes), state=state,
+                location={"coordinates": [lon, 44.4]})
+
+
+def test_observations_sort_and_report_changes_without_repeating_states():
+    paths, events = history.observations([
+        position(2, "at_berth", 8.87), position(0, "anchored"), position(1, "anchored", 8.86)])
+    assert paths == [[[8.85, 44.4], [8.86, 44.4], [8.87, 44.4]]]
+    assert [(e["state"], e["kind"], e["ts"]) for e in events] == [
+        ("anchored", "First observed", OBSERVED_NOW),
+        ("at_berth", "State change observed", OBSERVED_NOW + timedelta(minutes=2))]
+
+
+def test_gap_breaks_route_and_does_not_claim_a_state_change():
+    gap = config.STALE_MINUTES + 1
+    paths, events = history.observations([
+        position(0, "anchored"), position(gap, "at_berth"), position(gap + 1, "at_berth", 8.86)])
+    assert paths == [[[8.85, 44.4], [8.86, 44.4]]]
+    assert events[1]["kind"] == "Seen after data gap"
+
+
+def test_empty_history():
+    assert history.observations([]) == ([], [])
+
+
+def test_missing_old_state_does_not_claim_an_observed_transition():
+    _, events = history.observations([position(0, None), position(1, 'anchored')])
+    assert events[1]['kind'] == 'First state observed'
+
+
+def test_gap_at_threshold_remains_continuous():
+    paths, events = history.observations([
+        position(0, 'anchored'), position(config.STALE_MINUTES, 'underway', 8.86)])
+    assert len(paths) == 1
+    assert events[1]['kind'] == 'State change observed'
+
+
+def test_observations_on_bundled_recording_preserve_data_gaps():
+    import gzip
+    import json
+    from collections import defaultdict
+    from pathlib import Path
+
+    groups = defaultdict(list)
+    path = Path(__file__).parents[1] / "data/sample/positions-2026-10-15.jsonl.gz"
+    with gzip.open(path, "rt") as stream:
+        for record in map(json.loads, stream):
+            record["ts"] = datetime.fromisoformat(record["ts"].replace("Z", "+00:00"))
+            record["location"] = {"coordinates": [record["lon"], record["lat"]]}
+            groups[record["mmsi"]].append(record)
+    for positions in groups.values():
+        ordered = sorted(positions, key=lambda p: p["ts"])
+        paths, events = history.observations(positions)
+        gaps = sum(b["ts"] - a["ts"] > timedelta(minutes=config.STALE_MINUTES)
+                   for a, b in zip(ordered, ordered[1:]))
+        assert sum(e["kind"] == "Seen after data gap" for e in events) == gaps
+        assert events[0]["kind"] == "First observed"
+        assert all(len(path) > 1 for path in paths)
+        assert all(e["ts"] in {p["ts"] for p in positions} for e in events)

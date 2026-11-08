@@ -22,6 +22,22 @@ def fits(vessel, berth):
     return berth["length"] >= vessel["length"] and vessel["category"] in berth["categories"]
 
 
+def plan_reason(vessel, berths):
+    """Why a vessel is excluded from the berth plan, or None when eligible."""
+    if vessel["category"] not in COMMERCIAL:
+        return "Not planned: only commercial vessels are included in the berth plan."
+    if vessel["state"] != "anchored":
+        return "Not planned: only vessels currently at anchor need a berth assignment."
+    if not vessel.get("length"):
+        return "Not planned: vessel length unknown; compatibility cannot be checked."
+    accepted = [b for b in berths if vessel["category"] in b["categories"]]
+    if not accepted:
+        return "Not planned: no known berth accepts this vessel category."
+    if not any(fits(vessel, b) for b in accepted):
+        return "Not planned: no known berth accepting this category is long enough. Berth lengths may be estimates."
+    return None
+
+
 def measure_stays(positions):
     """Complete berth stays in a position history: {mmsi, start, end} for each.
 
@@ -135,12 +151,14 @@ def prepare(vessels, berths, now, service=None):
         # Known limit: a coin-flip guess; the upgrade is reading the arrival from the history.
         leaves = v["since"] + timedelta(minutes=stay if v.get("since_seen", True) else stay / 2)
         berth["free_from"] = max(0, int((leaves - now).total_seconds() // 60))
-    ships = [{"mmsi": v["mmsi"], "length": v["length"], "category": v["category"],
-              "arrival": 0, "duration": service[v["category"]]}
-             for v in known if v["state"] == "anchored" and any(fits(v, b) for b in berths)]
-    planned = {ship["mmsi"] for ship in ships}
-    unfit = [v for v in vessels
-             if v["state"] == "anchored" and v["category"] in COMMERCIAL and v["mmsi"] not in planned]
+    ships, unfit = [], []
+    for v in vessels:
+        reason = plan_reason(v, berths)
+        if reason is None:
+            ships.append({"mmsi": v["mmsi"], "length": v["length"], "category": v["category"],
+                          "arrival": 0, "duration": service[v["category"]]})
+        elif v["state"] == "anchored" and v["category"] in COMMERCIAL:
+            unfit.append(v)
     return ships, berths, unfit
 
 
