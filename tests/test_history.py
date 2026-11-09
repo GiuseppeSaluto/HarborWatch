@@ -957,3 +957,107 @@ def test_thin_positions_give_the_same_states_at_on_the_bundled_recording():
         for mmsi, row in expected.items():
             assert ({k: actual[mmsi][k] for k in ("state", "since", "since_seen")}
                     == {k: row[k] for k in ("state", "since", "since_seen")}), (t, mmsi)
+
+
+# --- extend_replay(kept, new, now) (replay cache, spec section 8 point 11 and section 13) --
+# thin_positions of kept + new, without positions with ts < now - POSITIONS_TTL_DAYS
+# (exactly the boundary is kept); a new list, `kept` left as it was.
+
+
+def ttl_days():
+    return timedelta(days=config.POSITIONS_TTL_DAYS)
+
+
+def mmsi_ts(positions):
+    return [(p["mmsi"], p["ts"]) for p in positions]
+
+
+def test_extend_replay_thins_the_union_of_kept_and_new():
+    step = keep() / 10
+    # Vessel 1 still: thinning keeps its first and last, so the last kept position becomes
+    # a middle one once newer positions arrive and has to go. `new` comes in any order.
+    kept_positions = history.thin_positions([thin_fix(1, i * step) for i in range(4)])
+    assert mmsi_ts(kept_positions) == [(1, REPLAY_T), (1, REPLAY_T + 3 * step)]
+    no_state = thin_fix(3, step)
+    del no_state["state"]
+    new = [thin_fix(2, 2 * step, "at_berth"), thin_fix(1, 5 * step), no_state,
+           thin_fix(1, 4 * step), thin_fix(2, step)]
+    result = history.extend_replay(kept_positions, new, REPLAY_T)
+    assert mmsi_ts(result) == [(1, REPLAY_T), (1, REPLAY_T + 5 * step),
+                               (2, REPLAY_T + step), (2, REPLAY_T + 2 * step)]
+    assert result == history.thin_positions(kept_positions + new)
+
+
+def test_extend_replay_drops_positions_older_than_the_ttl_and_keeps_the_exact_boundary():
+    # Alternating states, so thinning keeps every position and only the TTL removes any.
+    step = keep() / 10
+    now = REPLAY_T + ttl_days()
+    second = timedelta(seconds=1)
+    kept_positions = history.thin_positions([
+        thin_fix(1, -second, "anchored"), thin_fix(1, timedelta(0), "at_berth"),
+        thin_fix(1, step, "anchored")])
+    assert len(kept_positions) == 3
+    new = [thin_fix(1, 2 * step, "at_berth"), thin_fix(2, -second, "underway"),
+           thin_fix(3, timedelta(0), "anchored")]
+    result = history.extend_replay(kept_positions, new, now)
+    assert mmsi_ts(result) == [(1, REPLAY_T), (1, REPLAY_T + step), (1, REPLAY_T + 2 * step),
+                               (3, REPLAY_T)]
+
+
+def test_extend_replay_returns_a_new_list_and_leaves_kept_unchanged():
+    import copy
+
+    step = keep() / 10
+    now = REPLAY_T + ttl_days()
+    # Vessel 1's last kept position is thinned away by `new`; vessel 2 is past the TTL.
+    kept_positions = history.thin_positions([thin_fix(1, i * step) for i in range(4)]
+                                            + [thin_fix(2, -step, "underway")])
+    before, snapshot = list(kept_positions), copy.deepcopy(kept_positions)
+    result = history.extend_replay(kept_positions, [thin_fix(1, 5 * step)], now)
+    assert result is not kept_positions
+    assert mmsi_ts(result) == [(1, REPLAY_T), (1, REPLAY_T + 5 * step)]
+    assert len(kept_positions) == len(before)
+    assert all(a is b for a, b in zip(kept_positions, before))
+    assert kept_positions == snapshot
+    # Nothing new: still a new list, not the cached one handed back.
+    assert history.extend_replay(kept_positions, [], REPLAY_T) is not kept_positions
+
+
+def test_extend_replay_in_pieces_gives_the_same_states_at_on_the_bundled_recording():
+    import gzip
+    import json
+    import random
+    from pathlib import Path
+
+    path = Path(__file__).parents[1] / "data/sample/positions-2026-10-15.jsonl.gz"
+    with gzip.open(path, "rt") as stream:
+        positions = [dict(mmsi=r["mmsi"], ts=datetime.fromisoformat(r["ts"].replace("Z", "+00:00")),
+                          sog=r["sog"], state=r["state"],
+                          location={"type": "Point", "coordinates": [r["lon"], r["lat"]]})
+                     for r in map(json.loads, stream)]
+    first = min(p["ts"] for p in positions)
+    last = max(p["ts"] for p in positions)
+    # The TTL boundary falls exactly on the first position: the filter removes nothing.
+    now = first + ttl_days()
+    cuts = [first + (last - first) * f for f in (0.3, 0.55, 0.8)] + [
+        last - timedelta(minutes=23, seconds=17)]
+    bounds = [first] + cuts + [last + timedelta(seconds=1)]
+    pieces = [[p for p in positions if lo <= p["ts"] < hi] for lo, hi in zip(bounds, bounds[1:])]
+    assert sum(map(len, pieces)) == len(positions)
+    shuffle = random.Random(7).shuffle
+    cache = history.thin_positions(pieces[0])
+    for piece in pieces[1:]:
+        piece = list(piece)
+        shuffle(piece)
+        cache = history.extend_replay(cache, piece, now)
+    assert len(cache) < len(positions)
+    instants = [first + (last - first) * k / 7 for k in range(8)] + [
+        cut + delta for cut in cuts for delta in (-timedelta(seconds=1), timedelta(0),
+                                                   timedelta(minutes=11, seconds=3))]
+    for t in instants:
+        expected = {r["mmsi"]: r for r in history.states_at(positions, t)}
+        actual = {r["mmsi"]: r for r in history.states_at(cache, t)}
+        assert set(actual) == set(expected), t
+        for mmsi, row in expected.items():
+            assert ({k: actual[mmsi][k] for k in ("state", "since", "since_seen")}
+                    == {k: row[k] for k in ("state", "since", "since_seen")}), (t, mmsi)

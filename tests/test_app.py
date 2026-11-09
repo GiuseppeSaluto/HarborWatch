@@ -28,8 +28,24 @@ def status_calls():
 
 
 @pytest.fixture
-def open_dashboard(monkeypatch, status_calls):
-    """Patch the loaders by name and run the dashboard; `replay` replaces replay_positions()."""
+def replay_calls():
+    """Every call to the patched replay_positions lands here."""
+    return []
+
+
+@pytest.fixture
+def replay_failure():
+    """Set "error" to an exception and the patched replay_positions raises it from then on."""
+    return {"error": None}
+
+
+@pytest.fixture
+def open_dashboard(monkeypatch, status_calls, replay_calls, replay_failure):
+    """Patch the loaders by name and run the dashboard.
+
+    `replay` replaces replay_positions(); `available` replaces replay_available(), by default
+    true exactly when there are replay positions, so `replay=[]` means "nothing to replay".
+    """
     from datetime import UTC, datetime, timedelta
 
     import pandas as pd
@@ -57,11 +73,20 @@ def open_dashboard(monkeypatch, status_calls):
         st.session_state.planned = df.mmsi.tolist()
         return {"plan": [dict(mmsi=2, berth="Test berth", start=30, wait=30)]}
 
-    def open_(replay=None):
+    def open_(replay=None, available=None):
         positions = stored_positions() if replay is None else replay
+        available = bool(positions) if available is None else available
+
+        def replay_positions():
+            replay_calls.append(True)
+            if replay_failure["error"] is not None:
+                raise replay_failure["error"]
+            return positions
+
         monkeypatch.setattr(app, "status_row", lambda now: status_calls.append(now) or True)
         # Not in app.py before the replay exists: raising=False keeps the Live tests runnable.
-        monkeypatch.setattr(app, "replay_positions", lambda: positions, raising=False)
+        monkeypatch.setattr(app, "replay_positions", replay_positions, raising=False)
+        monkeypatch.setattr(app, "replay_available", lambda: available, raising=False)
         monkeypatch.setattr(app, "vessel_static", lambda: REPLAY_STATIC, raising=False)
         monkeypatch.setattr(app, "load_states", load_states)
         monkeypatch.setattr(app, "recent_tracks", recent_tracks)
@@ -351,6 +376,42 @@ def test_without_positions_replay_cannot_be_used_and_page_stays_live(open_dashbo
     assert not replay_banners(app)
     assert vessel_ids(app) == {1, 2, 3}
     assert any("replay" in text.lower() for text in card_texts(app))
+
+
+def test_live_never_calls_replay_positions(dashboard, replay_calls):
+    # Spec: replay positions are read only when someone opens Replay, never in Live.
+    assert not dashboard.exception
+    dashboard.button(key="map-anchored").click().run()
+    assert not dashboard.exception
+    assert replay_calls == []
+    switch_to_replay(dashboard)
+    assert replay_calls
+
+
+def test_replay_unavailable_disables_replay_even_with_positions(open_dashboard, status_calls):
+    # replay_available() decides, not the positions: false (no positions with a state, or
+    # Atlas not answering) and the switch cannot leave Live.
+    app = open_dashboard(available=False)
+    assert not app.exception
+    switch = widget(app, "view-mode")
+    if switch is not None:
+        options = [getattr(o, "content", o) for o in switch.proto.options]
+        assert switch.proto.disabled or "Replay" not in options
+    assert status_calls
+    assert not replay_banners(app)
+    assert vessel_ids(app) == {1, 2, 3}
+    assert any("No recorded positions to replay" in text for text in card_texts(app))
+
+
+def test_replay_with_atlas_unreachable_shows_the_atlas_message(dashboard, replay_failure):
+    # ConnectionFailure or any subclass (the server selection timeout): the Live message,
+    # no exception on the page. switch_to_replay already checks there is no exception.
+    from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+
+    for error in (ConnectionFailure("down"), ServerSelectionTimeoutError("timed out")):
+        replay_failure["error"] = error
+        switch_to_replay(dashboard)
+        assert any("Cannot reach MongoDB Atlas" in text for text in card_texts(dashboard)), error
 
 
 # --- Replay step 2: the replay-map component (spec section 8 point 11, "Nomi per i test") --

@@ -1,6 +1,7 @@
 """Streamlit dashboard: vessels by state on a map, and waiting time at anchor."""
 
 import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
@@ -13,7 +14,7 @@ from app_charts import chart_time, congestion_chart, fmt, fmt_age, gantt, legend
 from app_theme import ICONS, LABELS, RUNNING_ICON_CSS, header_grid_css, state_card_css
 from classify import COMMERCIAL, ship_category
 from diagnostics import diagnose, probe_stream
-from history import continuous_hours, hourly_series, longest_run, states_at, thin_positions, vessel_tracks
+from history import continuous_hours, extend_replay, hourly_series, longest_run, states_at, vessel_tracks
 from optimize import plan_berths, prepare, service_minutes, trusted_stay, usable_stays
 from app_replay import replay_map
 from app_vessel import open_vessel_details, select_map_vessel, vessel_card
@@ -53,14 +54,14 @@ def toggle_map_state(state):
 @st.fragment(run_every="60s")  # reruns only this function, so the page doesn't flicker
 def dashboard():
     now = pd.Timestamp(datetime.now(UTC))
-    positions = replay_positions()
+    available = replay_available()
     # The page in order of trust (spec section 8, point 9): the port now, its history, then the
     # model's proposal. The status comes first: it matters most when something is down.
     with st.container(horizontal=True, vertical_alignment="center"):
         mode = st.segmented_control("View", ["Live", "Replay"], default="Live", required=True, key="view-mode",
-                                    disabled=not positions, label_visibility="collapsed",
+                                    disabled=not available, label_visibility="collapsed",
                                     help="Replay: the port as it was at a past moment of the recorded week")
-        replay = mode == "Replay" and bool(positions)
+        replay = mode == "Replay" and available
         # The status, diagnostics and Atlas numbers are about the system now, not the port at t.
         atlas_ok = True if replay else status_row(now)
         commercial_only = st.toggle("Commercial vessels only", value=True,
@@ -69,8 +70,13 @@ def dashboard():
         show_tracks = st.toggle("Show tracks", value=True,
                                 help=f"Paths of the last {config.TRACK_HOURS} h, for vessels that moved at least "
                                      f"{config.TRACK_MIN_MOVE_M} m")
-    if not positions:
+    if not available:
         st.caption("No recorded positions to replay yet.")
+    if replay:
+        try:
+            positions = replay_positions()
+        except ConnectionFailure:  # network, DNS, IP access list, server selection timeout
+            atlas_ok = False
     if not atlas_ok:
         st.error("Cannot reach MongoDB Atlas: open Status for the diagnosis.", icon=":material/cloud_off:")
         return
@@ -374,18 +380,43 @@ def tracks_and_spans(positions, now):
     return vessel_tracks(positions, now), {m: last - first for m, (first, last) in spans.items()}
 
 
-# Shared by every visitor without a copy per rerun (cache_data would copy ~100 000 positions).
-# Known limit: the first visitor after each refresh waits for the whole week to load, also in Live,
-# which needs to know whether there is anything to replay.
-@st.cache_resource(ttl=config.REPLAY_CACHE_MINUTES * 60)
-def replay_positions():
-    """The stored positions the replay needs (thin_positions: states_at is unchanged by thinning).
+@st.cache_data(ttl=60)
+def replay_available():
+    """Whether there is anything to replay: one indexed lookup, never the week of positions."""
+    try:
+        return get_db().positions.find_one({"state": {"$exists": True}}, {"_id": 1}) is not None
+    except ConnectionFailure:  # the Live page reports Atlas itself
+        return False
 
+
+@st.cache_resource
+def _replay_store():
+    """The replay's positions, shared by every visitor without a copy per rerun."""
+    return {"positions": [], "checked": None, "lock": threading.Lock()}
+
+
+def replay_positions():
+    """The stored positions the replay needs, thinned (states_at is unchanged by thinning).
+
+    Read from Atlas only when someone opens the replay: the whole week once per process, then
+    at most every REPLAY_CACHE_MINUTES only the positions newer than the last one in memory.
     Known limit: a vessel's last position can be up to REPLAY_KEEP_MINUTES older and REPLAY_MOVE_M
     farther than the real one, so "Last signal" in the vessel card can read a few minutes more.
     """
-    return thin_positions(get_db().positions.find(
-        {"state": {"$exists": True}}, {"_id": 0, "mmsi": 1, "ts": 1, "location": 1, "sog": 1, "state": 1}))
+    store = _replay_store()
+    with store["lock"]:  # two sessions must not both read the week
+        now = datetime.now(UTC)
+        if store["checked"] is None or now - store["checked"] > timedelta(minutes=config.REPLAY_CACHE_MINUTES):
+            query = {"state": {"$exists": True}}
+            if store["positions"]:
+                query["ts"] = {"$gt": max(p["ts"] for p in store["positions"])}
+            new = list(get_db().positions.find(
+                query, {"_id": 0, "mmsi": 1, "ts": 1, "location": 1, "sog": 1, "state": 1}))
+            # Unchanged positions stay the same object, so the replay map is not sent again.
+            if new or store["checked"] is None:
+                store["positions"] = extend_replay(store["positions"], new, now)
+            store["checked"] = now
+        return store["positions"]
 
 
 @st.cache_resource(max_entries=2)

@@ -137,6 +137,19 @@ def thin_positions(positions):
     return kept
 
 
+
+def extend_replay(kept, new, now):
+    """The replay's positions after new ones arrive: TTL first, as Atlas does, then thinned.
+
+    kept: the previous result (or []); new: the positions stored since. Returns a new list.
+    Thinning in pieces leaves states_at unchanged, since thin_positions keeps each vessel's
+    last position. Known limit: when the TTL removes positions, a state begun before the cut
+    can get a since up to REPLAY_KEEP_MINUTES later than from the full positions.
+    """
+    cut = now - timedelta(days=config.POSITIONS_TTL_DAYS)
+    return thin_positions([p for p in itertools.chain(kept, new) if p["ts"] >= cut])
+
+
 def observations(positions):
     """Build routes and state events from sampled AIS positions.
 
