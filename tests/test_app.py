@@ -40,7 +40,13 @@ def replay_failure():
 
 
 @pytest.fixture
-def open_dashboard(monkeypatch, status_calls, replay_calls, replay_failure):
+def history_calls():
+    """The `end` of every call to the patched vessel_history lands here (None without it)."""
+    return []
+
+
+@pytest.fixture
+def open_dashboard(monkeypatch, status_calls, replay_calls, replay_failure, history_calls):
     """Patch the loaders by name and run the dashboard.
 
     `replay` replaces replay_positions(); `available` replaces replay_available(), by default
@@ -64,8 +70,9 @@ def open_dashboard(monkeypatch, status_calls, replay_calls, replay_failure):
         return ([dict(mmsi=i, paths=[[[8.85, 44.4], [8.86, 44.41]]]) for i in range(1, 5)],
                 {i: timedelta(minutes=10) for i in range(1, 5)})
 
-    def vessel_history(mmsi, hours):
-        now = datetime.now(UTC)
+    def vessel_history(mmsi, hours, end=None):
+        history_calls.append(end)
+        now = datetime.now(UTC) if end is None else end
         return [dict(ts=now - timedelta(minutes=2), state="underway", location={"coordinates": [8.84, 44.4]}),
                 dict(ts=now - timedelta(minutes=1), state="anchored", location={"coordinates": [8.85, 44.4]})]
 
@@ -575,3 +582,32 @@ def test_deck_version_matches_the_one_streamlit_bundles():
     # No file or no match means the guard is blind: fail, never skip.
     assert len(found) == 1, f"bundled deck.gl version not found or ambiguous in {files}: {found}"
     assert app_replay.DECK_VERSION == found.pop()
+
+
+# --- Replay touch-ups (2026-11-09, spec section 8 point 11 and section 10) -----------------
+
+
+def test_vessel_card_history_ends_at_t_in_replay_and_now_in_live(open_dashboard, history_calls):
+    # Not the last step, so "t" cannot be confused with the default instant or with now.
+    t = REPLAY_BASE + 2 * step()
+    app = open_dashboard(replay=anchored_every_minute(777, REPLAY_BASE, REPLAY_BASE + 3 * step()))
+    app.selectbox(key="detail-mmsi").select(2).run()
+    assert not app.exception
+    assert history_calls and all(end is None for end in history_calls)
+    switch_to_replay(app)
+    history_calls.clear()
+    app.session_state["replay-map"] = {"t": epoch(t), "picked": 777}
+    app.run()
+    assert not app.exception
+    assert app.selectbox(key="detail-mmsi").value == 777
+    assert history_calls
+    assert all(end is not None and end == t for end in history_calls), history_calls
+
+
+def test_track_legend_says_fading_in_replay_and_dashed_in_live(dashboard):
+    def legend(app):
+        return " ".join(c.value for c in app.caption)
+
+    assert "dashed lines" in legend(dashboard) and "fading lines" not in legend(dashboard)
+    switch_to_replay(dashboard)
+    assert "fading lines" in legend(dashboard) and "dashed lines" not in legend(dashboard)

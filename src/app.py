@@ -85,7 +85,8 @@ def dashboard():
         now = replay_time(tracks)
         st.info(f"Replay · {local(now):%a %d %b %H:%M %Z}: the port as it was then, not live data.",
                 icon=":material/history:")
-        df, history_loader = replay_states(positions, now), replay_history(positions, now)
+        t = now.to_pydatetime()
+        df, history_loader = replay_states(positions, now), lambda mmsi, hours: vessel_history(mmsi, hours, end=t)
     else:
         df, history_loader = load_states(get_db(), now), vessel_history
     if df.empty:
@@ -122,7 +123,7 @@ def dashboard():
                             key="port-map", on_select=select_map_vessel, selection_mode="single-object")
         if not visible_states:
             st.caption("All vessel states hidden. Select a card to show vessels.")
-        st.caption(legend(mapped) + f" · dashed lines: last {config.TRACK_HOURS} h · circles: berth areas · "
+        st.caption(legend(mapped) + f" · {'fading' if replay else 'dashed'} lines: last {config.TRACK_HOURS} h · circles: berth areas · "
                    "hover for a summary · click a vessel to open its details below", unsafe_allow_html=True)
     with right:
         anchorage_panel(anchored, unseen, now)
@@ -137,11 +138,14 @@ def dashboard():
 
 
 @st.cache_data(ttl=60)
-def vessel_history(mmsi, hours):
-    """Use the (mmsi, ts) index instead of loading the whole port history."""
-    now = datetime.now(UTC)
+def vessel_history(mmsi, hours, end=None):
+    """The vessel's positions in the `hours` before `end` (now if None), via the (mmsi, ts) index.
+
+    The replay passes end=t: the full positions, not the thinned ones it keeps in memory.
+    """
+    end = end or datetime.now(UTC)
     return list(get_db().positions.find(
-        {"mmsi": mmsi, "ts": {"$gte": now - timedelta(hours=hours), "$lte": now}},
+        {"mmsi": mmsi, "ts": {"$gte": end - timedelta(hours=hours), "$lte": end}},
         {"_id": 0, "ts": 1, "state": 1, "location": 1}).sort("ts", 1))
 
 
@@ -392,7 +396,7 @@ def replay_available():
 @st.cache_resource
 def _replay_store():
     """The replay's positions, shared by every visitor without a copy per rerun."""
-    return {"positions": [], "checked": None, "lock": threading.Lock()}
+    return {"positions": [], "checked": None, "lock": threading.Lock(), "tracks": (None, None)}
 
 
 def replay_positions():
@@ -419,15 +423,14 @@ def replay_positions():
         return store["positions"]
 
 
-@st.cache_resource(max_entries=2)
-def _replay_tracks(_positions, key):
+def _replay_tracks(positions):
     step = timedelta(minutes=config.REPLAY_STEP_MINUTES)
     epoch = datetime(2000, 1, 1, tzinfo=UTC)
-    stamps = [p["ts"] for p in _positions]
+    stamps = [p["ts"] for p in positions]
     first, last = (epoch + (t - epoch) // step * step for t in (min(stamps), max(stamps)))
     t0 = int(first.timestamp())
     by_vessel = {}
-    for p in sorted(_positions, key=lambda p: (p["mmsi"], p["ts"])):
+    for p in sorted(positions, key=lambda p: (p["mmsi"], p["ts"])):
         by_vessel.setdefault(p["mmsi"], []).append(p)
     vessels = [{"mmsi": mmsi,
                 "positions": [[round(c, 5) for c in p["location"]["coordinates"]] for p in fixes],
@@ -440,9 +443,14 @@ def _replay_tracks(_positions, key):
 def replay_tracks(positions):
     """The positions in the compact shape the replay map gets, per vessel, and the slider limits.
 
-    Cached: the same object on every rerun, so Streamlit does not send it to the browser again.
+    Kept in the replay store with the list it was built from: the same object on every rerun,
+    so Streamlit does not send it to the browser again, rebuilt only when the positions change.
     """
-    return _replay_tracks(positions, (id(positions), len(positions)))
+    store = _replay_store()
+    with store["lock"]:
+        if store["tracks"][0] is not positions:  # `is`, not id(): the store keeps the list alive
+            store["tracks"] = (positions, _replay_tracks(positions))
+        return store["tracks"][1]
 
 
 def replay_time(tracks):
@@ -491,14 +499,6 @@ def replay_states(positions, t):
                      "length": v.get("length"), "destination": v.get("destination"),
                      "ship_type": v.get("ship_type") or 0})  # 0 = unknown, as in load_states
     return pd.DataFrame(rows)
-
-
-def replay_history(positions, t):
-    """vessel_history for the vessel card, ending at t instead of now."""
-    def history(mmsi, hours):
-        start = t - timedelta(hours=hours)
-        return sorted((p for p in positions if p["mmsi"] == mmsi and start <= p["ts"] <= t), key=lambda p: p["ts"])
-    return history
 
 
 if __name__ == "__main__":

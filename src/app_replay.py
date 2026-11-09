@@ -73,7 +73,7 @@ CSS = """
 .hw-map { position: relative; height: 560px; border-radius: 0.5rem; overflow: hidden; }
 .hw-timeline { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center; margin-top: 8px; }
 .hw-clock { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 8.5em; }
-.hw-track { position: relative; height: 32px; touch-action: none; cursor: pointer; outline: none; }
+.hw-track { position: relative; height: 32px; margin: 0 13px; touch-action: none; cursor: pointer; outline: none; }
 .hw-rail, .hw-done { position: absolute; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; left: 0; }
 .hw-rail { right: 0; background: var(--st-secondary-background-color); }
 .hw-done { background: var(--st-primary-color); }
@@ -210,6 +210,7 @@ export default async function (component) {
     hw.overlay = new MapboxOverlay({ layers: [], getTooltip: d => hw.tooltip(d),
       onClick: d => { if (d.layer && d.layer.id === "vessels") setStateValue("picked", d.object.mmsi); } });
     hw.map.addControl(hw.overlay);
+    hw.map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
     hw.basemap = style.basemap;
   } else if (hw.basemap !== style.basemap) {
     hw.map.setStyle(style.basemap); hw.basemap = style.basemap;
