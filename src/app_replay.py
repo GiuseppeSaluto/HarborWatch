@@ -18,7 +18,11 @@ from icons import ICONS
 CATEGORIES = sorted({ship_category(code) for code in range(0, 101)})
 
 # Exact versions: a CDN alias like @9 could change under a published page.
-DECK = "https://cdn.jsdelivr.net/npm/deck.gl@9.1.14/dist.min.js"
+# deck.gl must be the version Streamlit bundles for st.pydeck_chart (9.4.1 in Streamlit 1.67):
+# deck.gl refuses a second, different version on the same page, and the Live map loads Streamlit's.
+# Known limit: a Streamlit upgrade that changes it breaks the replay map until this is updated.
+DECK_VERSION = "9.4.1"
+DECK = f"https://cdn.jsdelivr.net/npm/deck.gl@{DECK_VERSION}/dist.min.js"
 MAPLIBRE = "https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl"
 # The basemaps Streamlit's own map uses, light or dark with the theme.
 BASEMAPS = {"light": "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
@@ -104,6 +108,10 @@ export default async function (component) {
     root.appendChild(css);
   }
   await window.hwReplayLibs;
+  if (!window.deck || !window.deck.MapboxOverlay) {
+    throw new Error(`replay map: deck.gl ${window.deck && window.deck.VERSION} on the page is not the full ` +
+      "build; is DECK_VERSION the version Streamlit bundles?");
+  }
   const { MapboxOverlay, ScatterplotLayer, TextLayer, IconLayer, TripsLayer } = window.deck;
   // The instance survives reruns: new data (filters, theme) updates it, the time stays.
   const hw = root.hwReplay || (root.hwReplay = { t: data.end });
