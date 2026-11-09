@@ -13,7 +13,7 @@ from app_charts import chart_time, congestion_chart, fmt, fmt_age, gantt, legend
 from app_theme import ICONS, LABELS, RUNNING_ICON_CSS, header_grid_css, state_card_css
 from classify import COMMERCIAL, ship_category
 from diagnostics import diagnose, probe_stream
-from history import continuous_hours, hourly_series, longest_run, vessel_tracks
+from history import continuous_hours, hourly_series, longest_run, states_at, vessel_tracks
 from optimize import plan_berths, prepare, service_minutes, trusted_stay, usable_stays
 from app_vessel import select_map_vessel, vessel_card
 
@@ -52,22 +52,38 @@ def toggle_map_state(state):
 @st.fragment(run_every="60s")  # reruns only this function, so the page doesn't flicker
 def dashboard():
     now = pd.Timestamp(datetime.now(UTC))
+    positions = replay_positions()
     # The page in order of trust (spec section 8, point 9): the port now, its history, then the
     # model's proposal. The status comes first: it matters most when something is down.
     with st.container(horizontal=True, vertical_alignment="center"):
-        atlas_ok = status_row(now)
+        mode = st.segmented_control("View", ["Live", "Replay"], default="Live", required=True, key="view-mode",
+                                    disabled=not positions, label_visibility="collapsed",
+                                    help="Replay: the port as it was at a past moment of the recorded week")
+        replay = mode == "Replay" and bool(positions)
+        # The status, diagnostics and Atlas numbers are about the system now, not the port at t.
+        atlas_ok = True if replay else status_row(now)
         commercial_only = st.toggle("Commercial vessels only", value=True,
                                     help="Cargo, tanker and passenger ships: tugs, pilot boats and yachts "
                                          "are the life of the port, not congestion.")
         show_tracks = st.toggle("Show tracks", value=True,
                                 help=f"Paths of the last {config.TRACK_HOURS} h, for vessels that moved at least "
                                      f"{config.TRACK_MIN_MOVE_M} m")
+    if not positions:
+        st.caption("No recorded positions to replay yet.")
     if not atlas_ok:
         st.error("Cannot reach MongoDB Atlas: open Status for the diagnosis.", icon=":material/cloud_off:")
         return
-    df = load_states(get_db(), now)
+    if replay:
+        now = replay_time(positions)
+        st.info(f"Replay · {local(now):%a %d %b %H:%M %Z}: the port as it was then, not live data.",
+                icon=":material/history:")
+        df, tracks, history_loader = replay_states(positions, now), tracks_and_spans(positions, now), \
+            replay_history(positions, now)
+    else:
+        df, tracks, history_loader = load_states(get_db(), now), None, vessel_history
     if df.empty:
-        st.warning(f"No vessel heard from in the last {config.STALE_MINUTES} minutes: is the ingestion running?")
+        st.warning(f"No vessel heard from in the {config.STALE_MINUTES} minutes before {local(now):%H:%M}." if replay
+                   else f"No vessel heard from in the last {config.STALE_MINUTES} minutes: is the ingestion running?")
         return
 
     df["type"] = df["ship_type"].map(ship_category)
@@ -91,20 +107,21 @@ def dashboard():
     left, right = st.columns([2, 1], gap="medium")
     with left:
         st.session_state["mapped-mmsis"] = mapped["mmsi"].tolist()
-        st.pydeck_chart(port_map(mapped, recent_tracks() if show_tracks else ([], {})), height=560,
+        tracks = (tracks or recent_tracks()) if show_tracks else ([], {})
+        st.pydeck_chart(port_map(mapped, tracks), height=560,
                         key="port-map", on_select=select_map_vessel, selection_mode="single-object")
         if not visible_states:
             st.caption("All vessel states hidden. Select a card to show vessels.")
         st.caption(legend(mapped) + f" · dashed lines: last {config.TRACK_HOURS} h · circles: berth areas · "
                    "hover for a summary · click a vessel to open its details below", unsafe_allow_html=True)
     with right:
-        anchorage_panel(anchored, unseen)
+        anchorage_panel(anchored, unseen, now)
 
     data = berth_plan_data(everyone, now)
-    vessel_card(everyone, now, vessel_history, data["plan"])
+    vessel_card(everyone, now, history_loader, data["plan"])
     berth_plan(data, now)
 
-    st.caption(f"Updated {local(now):%H:%M:%S %Z} · vessels heard from in the last {config.STALE_MINUTES} min · "
+    st.caption(f"{'Replay at' if replay else 'Updated'} {local(now):%H:%M:%S %Z} · vessels heard from in the last {config.STALE_MINUTES} min · "
                f"{hidden} other vessels hidden (tugs, yachts, service craft, or type not received yet) · "
                "map © OpenStreetMap contributors")
 
@@ -137,7 +154,7 @@ def state_cards(counts, anchored, unseen):
     st.html(state_card_css())
 
 
-def anchorage_panel(anchored, unseen):
+def anchorage_panel(anchored, unseen, now):
     """The vessels waiting at anchor now, longest wait first, and the anchorage's hourly history."""
     st.subheader("Waiting at anchor")
     if anchored.empty:
@@ -154,6 +171,8 @@ def anchorage_panel(anchored, unseen):
     # The anchorage now and its history side by side: both are about the same vessels.
     st.markdown("**At anchor, per hour**")
     history = congestion_history()
+    if not history.empty:
+        history = history[history["hour"] <= chart_time(now)]  # the replay shows no hour after t
     if history.empty:
         st.write("No history yet.")
     else:
@@ -177,15 +196,17 @@ def congestion_history(days=config.POSITIONS_TTL_DAYS):
 
 
 @st.cache_data(ttl=3600)  # a week of positions: recompute hourly, not every minute
-def stay_estimates():
-    """Expected stay per category, measured from the archived stays where possible."""
+def stay_estimates(until):
+    """Expected stay per category, measured from the archived stays that ended by until."""
     db = get_db()
     vessels = {v["mmsi"]: v for v in db.vessels.find({}, {"mmsi": 1, "ship_type": 1, "length": 1})}
     stays = [{"category": ship_category(vessels.get(d["mmsi"], {}).get("ship_type")),
               "length": vessels.get(d["mmsi"], {}).get("length"),
               "minutes": (d["end"] - d["start"]).total_seconds() / 60}
-             for d in db.stays.find({}, {"mmsi": 1, "start": 1, "end": 1})]
+             for d in db.stays.find({"end": {"$lte": until.to_pydatetime()}}, {"mmsi": 1, "start": 1, "end": 1})]
     history = congestion_history(days=None)  # the continuous window can be older than the chart
+    if not history.empty:
+        history = history[history["hour"] <= chart_time(until)]
     window = 60 * longest_run(history["anchored"].tolist() if not history.empty else [])
     counts = {c: sum(1 for s in usable_stays(stays) if s["category"] == c) for c in config.SERVICE_MINUTES}
     return service_minutes(stays, window), counts, window
@@ -199,7 +220,8 @@ def berth_plan_data(df, now):
                 "lon": r["lon"], "lat": r["lat"]}
                for _, r in rows.iterrows()]
     names = {r["mmsi"]: vessel_name(r["name"], r["mmsi"]) for _, r in rows.iterrows()}
-    service, counts, window = stay_estimates()
+    # Whole hours keep the cache key steady in Live; in the replay no stay ends after t.
+    service, counts, window = stay_estimates(now.floor("h"))
     ships, berths, unfit = prepare(vessels, config.BERTHS, now, service)
     plan = plan_berths(ships, berths)
     return dict(plan=plan, berths=berths, unfit=unfit, names=names, service=service, counts=counts, window=window)
@@ -276,7 +298,7 @@ def data_numbers(age, stopped):
     # last hour with data to the first hour without.
     history = congestion_history()
     hours = continuous_hours(history["anchored"].tolist() if not history.empty else [])
-    _, counts, window = stay_estimates()
+    _, counts, window = stay_estimates(pd.Timestamp(datetime.now(UTC)).floor("h"))
     measured = [c for c, n in counts.items() if trusted_stay(n, config.SERVICE_MINUTES[c], window, config.MIN_STAYS)]
     stats = get_db().command("dbStats")
     used_mb = (stats["dataSize"] + stats["indexSize"]) / 2**20
@@ -335,11 +357,68 @@ def recent_tracks():
     # A time filter on ts: served by the ts_1 index, the 2dsphere one is not needed here.
     positions = list(get_db().positions.find(
         {"ts": {"$gte": now - timedelta(hours=config.TRACK_HOURS)}}, {"_id": 0, "mmsi": 1, "ts": 1, "location": 1}))
-    spans = {}
+    return tracks_and_spans(positions, now)
+
+
+def tracks_and_spans(positions, now):
+    """vessel_tracks up to now, plus how long each vessel has been followed in the last TRACK_HOURS."""
+    start, spans = now - timedelta(hours=config.TRACK_HOURS), {}
     for p in positions:
-        first, last = spans.get(p["mmsi"], (p["ts"], p["ts"]))
-        spans[p["mmsi"]] = (min(first, p["ts"]), max(last, p["ts"]))
+        if start <= p["ts"] <= now:
+            first, last = spans.get(p["mmsi"], (p["ts"], p["ts"]))
+            spans[p["mmsi"]] = (min(first, p["ts"]), max(last, p["ts"]))
     return vessel_tracks(positions, now), {m: last - first for m, (first, last) in spans.items()}
+
+
+# Shared by every visitor without a copy per rerun (cache_data would copy ~160 000 positions).
+# Known limit: the first replay visitor after each refresh waits for the whole week to load;
+# the upgrade is keeping only state changes plus each vessel's last position (spec section 8, point 11).
+@st.cache_resource(ttl=config.REPLAY_CACHE_MINUTES * 60)
+def replay_positions():
+    """Every stored position with a state, for the replay."""
+    return list(get_db().positions.find(
+        {"state": {"$exists": True}}, {"_id": 0, "mmsi": 1, "ts": 1, "location": 1, "sog": 1, "state": 1}))
+
+
+@st.cache_data(ttl=600)
+def vessel_static():
+    """Name, length, destination and AIS type of every vessel, for the replay."""
+    return list(get_db().vessels.find({}, {"_id": 0, "mmsi": 1, "name": 1, "length": 1, "destination": 1,
+                                           "ship_type": 1}))
+
+
+def replay_time(positions):
+    """The replay's instant t: a slider over the recorded week, on whole REPLAY_STEP_MINUTES."""
+    step = timedelta(minutes=config.REPLAY_STEP_MINUTES)
+    stamps = [p["ts"] for p in positions]
+    epoch = datetime(2000, 1, 1, tzinfo=UTC)
+    first, last = (epoch + (t - epoch) // step * step for t in (min(stamps), max(stamps)))
+    steps = [first + i * step for i in range((last - first) // step + 1)]
+    t = st.select_slider("Replay time", steps, value=steps[-1], key="replay-t", label_visibility="collapsed",
+                         format_func=lambda t: f"{local(t):%a %d %b %H:%M}")
+    return pd.Timestamp(t)
+
+
+def replay_states(positions, t):
+    """load_states at t: the vessels heard from in the STALE_MINUTES before t, with their static data."""
+    static = {v["mmsi"]: v for v in vessel_static()}
+    rows = []
+    for s in states_at(positions, t):
+        v = static.get(s["mmsi"], {})
+        lon, lat = s["location"]["coordinates"]
+        rows.append({"mmsi": s["mmsi"], "state": s["state"], "since": s["since"], "since_seen": s["since_seen"],
+                     "ts": s["ts"], "sog": s["sog"], "lon": lon, "lat": lat, "name": v.get("name"),
+                     "length": v.get("length"), "destination": v.get("destination"),
+                     "ship_type": v.get("ship_type") or 0})  # 0 = unknown, as in load_states
+    return pd.DataFrame(rows)
+
+
+def replay_history(positions, t):
+    """vessel_history for the vessel card, ending at t instead of now."""
+    def history(mmsi, hours):
+        start = t - timedelta(hours=hours)
+        return sorted((p for p in positions if p["mmsi"] == mmsi and start <= p["ts"] <= t), key=lambda p: p["ts"])
+    return history
 
 
 if __name__ == "__main__":

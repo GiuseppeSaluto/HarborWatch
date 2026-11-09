@@ -705,3 +705,124 @@ def test_position_without_state_key_is_accepted():
     del first["state"]
     _, events = history.observations([position(1, "anchored"), first])
     assert [e["kind"] for e in events] == ["First observed", "First state observed"]
+
+
+# --- states_at(positions, t) (replay, spec section 8 point 11 and section 13) ------------
+# Same rules as ingest.state_update, applied to one vessel's positions in ts order;
+# "recent" = previous ts >= ts - STALE_MINUTES, and a vessel is shown only if its last
+# position <= t has ts >= t - STALE_MINUTES.
+
+REPLAY_T = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
+
+
+def fix_at(mmsi, offset, state, lon=8.85, sog=0.0):
+    """A stored position `offset` (a timedelta, or minutes) relative to REPLAY_T."""
+    if not isinstance(offset, timedelta):
+        offset = timedelta(minutes=offset)
+    doc = dict(mmsi=mmsi, ts=REPLAY_T + offset, sog=sog,
+               location={"type": "Point", "coordinates": [lon, 44.4]})
+    if state is not None:
+        doc["state"] = state
+    return doc
+
+
+def states_at(positions, t=REPLAY_T):
+    result = history.states_at(positions, t)
+    by_mmsi = {row["mmsi"]: row for row in result}
+    assert len(by_mmsi) == len(result), "one entry per vessel"
+    return by_mmsi
+
+
+def stale():
+    return timedelta(minutes=config.STALE_MINUTES)
+
+
+def test_states_at_first_position_starts_an_unseen_state():
+    row = states_at([fix_at(1, -5, "anchored", lon=8.8, sog=0.2)])[1]
+    assert {"mmsi", "ts", "location", "sog", "state", "since", "since_seen"} <= set(row)
+    assert row["state"] == "anchored"
+    assert row["since"] == REPLAY_T - timedelta(minutes=5)
+    assert row["since_seen"] is False
+
+
+def test_states_at_recent_state_change_is_seen_and_then_kept():
+    # anchored -> at_berth (recent, different): since moves and is seen;
+    # at_berth again (recent, same): since and since_seen stay those of the change.
+    row = states_at([fix_at(1, -20, "anchored"), fix_at(1, -10, "at_berth"),
+                     fix_at(1, -1, "at_berth")])[1]
+    assert row["since"] == REPLAY_T - timedelta(minutes=10)
+    assert row["since_seen"] is True
+
+
+def test_states_at_same_state_keeps_unseen_since_of_first_position():
+    row = states_at([fix_at(1, -20, "anchored"), fix_at(1, -1, "anchored")])[1]
+    assert row["since"] == REPLAY_T - timedelta(minutes=20)
+    assert row["since_seen"] is False
+
+
+def test_states_at_gap_of_exactly_stale_minutes_is_still_recent():
+    first = -stale() - timedelta(minutes=1)
+    row = states_at([fix_at(1, first, "anchored"), fix_at(1, -1, "anchored")])[1]
+    assert row["since"] == REPLAY_T + first
+    row = states_at([fix_at(1, first, "anchored"), fix_at(1, -1, "at_berth")])[1]
+    assert row["since"] == REPLAY_T - timedelta(minutes=1)
+    assert row["since_seen"] is True
+
+
+def test_states_at_gap_one_second_over_stale_minutes_restarts_unseen():
+    # Same state or different: a gap restarts since and makes it unseen.
+    first = -stale() - timedelta(minutes=1, seconds=1)
+    for later in ("anchored", "at_berth"):
+        row = states_at([fix_at(1, first, "anchored"), fix_at(1, -1, later)])[1]
+        assert row["since"] == REPLAY_T - timedelta(minutes=1), later
+        assert row["since_seen"] is False, later
+
+
+def test_states_at_vessel_disappears_one_second_after_stale_minutes():
+    assert set(states_at([fix_at(1, -stale(), "anchored")])) == {1}
+    assert states_at([fix_at(1, -stale() - timedelta(seconds=1), "anchored")]) == {}
+
+
+def test_states_at_ignores_positions_after_t():
+    rows = states_at([fix_at(1, -10, "anchored", lon=8.80, sog=0.1),
+                      fix_at(1, 1, "at_berth", lon=8.90, sog=3.0),
+                      fix_at(2, 5, "underway")])
+    assert set(rows) == {1}
+    assert rows[1]["ts"] == REPLAY_T - timedelta(minutes=10)
+    assert (rows[1]["state"], rows[1]["sog"], rows[1]["location"]["coordinates"]) == (
+        "anchored", 0.1, [8.80, 44.4])
+    assert rows[1]["since"] == REPLAY_T - timedelta(minutes=10)
+    assert history.states_at([fix_at(1, 1, "anchored")], REPLAY_T) == []
+
+
+def test_states_at_unordered_input_uses_last_position_fields():
+    positions = [fix_at(1, -2, "at_berth", lon=8.87, sog=0.3),
+                 fix_at(1, -20, "anchored", lon=8.85, sog=0.0),
+                 fix_at(1, -10, "at_berth", lon=8.86, sog=1.5)]
+    row = states_at(positions)[1]
+    assert row["ts"] == REPLAY_T - timedelta(minutes=2)
+    assert row["state"] == "at_berth"
+    assert row["sog"] == 0.3
+    assert row["location"]["coordinates"] == [8.87, 44.4]
+    assert row["since"] == REPLAY_T - timedelta(minutes=10)
+    assert row["since_seen"] is True
+
+
+def test_states_at_ignores_positions_without_state():
+    # fix_at(..., None) leaves the key out; the spec ignores `state: None` the same way.
+    explicit_none = fix_at(1, -3, "anchored", lon=8.95, sog=5.0) | {"state": None}
+    rows = states_at([fix_at(1, -20, "anchored", lon=8.85),
+                      fix_at(1, -5, None, lon=8.90, sog=4.0), explicit_none,
+                      fix_at(2, -1, None),
+                      fix_at(3, -1, "anchored") | {"state": None}])
+    assert set(rows) == {1}
+    assert rows[1]["ts"] == REPLAY_T - timedelta(minutes=20)
+    assert rows[1]["location"]["coordinates"] == [8.85, 44.4]
+
+
+def test_states_at_counts_a_position_exactly_at_t():
+    rows = states_at([fix_at(1, -10, "anchored"), fix_at(1, 0, "at_berth", lon=8.9, sog=0.4),
+                      fix_at(2, 0, "underway")])
+    assert set(rows) == {1, 2}
+    assert (rows[1]["ts"], rows[1]["state"], rows[1]["since"]) == (REPLAY_T, "at_berth", REPLAY_T)
+    assert rows[1]["location"]["coordinates"] == [8.9, 44.4]

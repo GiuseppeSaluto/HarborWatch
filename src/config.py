@@ -9,7 +9,8 @@ from pathlib import Path
 AISSTREAM_API_KEY = os.environ["AISSTREAM_API_KEY"]
 MONGODB_URI = os.environ["MONGODB_URI"]
 
-DB_NAME = "harborwatch"
+# Another database on the same server, e.g. a local copy of the data for the replay.
+DB_NAME = os.environ.get("MONGODB_DB", "harborwatch")
 
 # Port of Genoa, from Voltri to Porto Antico plus the southern anchorage.
 # AISStream format: two corners as [lat, lon].
@@ -84,3 +85,8 @@ STAY_BATCH_POSITIONS = 20_000
 # Stays and hourly congestion are copied to permanent collections this often (the positions
 # they come from expire after POSITIONS_TTL_DAYS).
 ARCHIVE_MINUTES = 10
+
+# Replay (the dashboard at a past instant): the time slider moves in steps of this many minutes,
+# and the positions behind it are read again at most this often.
+REPLAY_STEP_MINUTES = 10
+REPLAY_CACHE_MINUTES = 10

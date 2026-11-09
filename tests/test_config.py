@@ -6,6 +6,10 @@ Plain values (thresholds, intervals) are not pinned here: changing one on purpos
 No external services needed.
 """
 
+import importlib
+
+import pytest
+
 import config
 
 COMMERCIAL = {"cargo", "tanker", "passenger"}
@@ -86,3 +90,22 @@ def test_live_minutes_covers_ais_delay_plus_flush():
     # Spec section 13: LIVE_MINUTES = AIS delay plus FLUSH_SECONDS, with margin.
     # Measured AIS delay, 90th percentile: 10.7 s (spec section 3).
     assert config.LIVE_MINUTES * 60 > 10.7 + config.FLUSH_SECONDS
+
+
+# --- DB_NAME (spec section 8 point 11, "Database") -----------------------------------------
+# `config.DB_NAME = os.environ.get("MONGODB_DB", "harborwatch")`: the name is read at import,
+# so the test reloads config, and reloads it again afterwards with the real environment.
+
+
+@pytest.fixture
+def reload_config(monkeypatch):
+    yield lambda: importlib.reload(config)
+    monkeypatch.undo()
+    importlib.reload(config)
+
+
+def test_db_name_comes_from_mongodb_db_with_harborwatch_as_default(monkeypatch, reload_config):
+    monkeypatch.setenv("MONGODB_DB", "harborwatch_archive_2026")
+    assert reload_config().DB_NAME == "harborwatch_archive_2026"
+    monkeypatch.delenv("MONGODB_DB")
+    assert reload_config().DB_NAME == "harborwatch"

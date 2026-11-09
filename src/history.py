@@ -91,6 +91,26 @@ def vessel_tracks(positions, now):
     return tracks
 
 
+def states_at(positions, t):
+    """The states collection as it was at t, rebuilt from the positions (the replay).
+
+    Applies ingest.state_update's rules to each vessel's positions up to t, in time order:
+    since restarts on a state change (seen) or after a silence over STALE_MINUTES (not seen).
+    Only vessels heard from in the STALE_MINUTES before t are returned, like the dashboard's
+    filter on states. Positions without a state (older documents) are ignored.
+    """
+    gap = timedelta(minutes=config.STALE_MINUTES)
+    states = {}
+    for p in sorted((p for p in positions if p["ts"] <= t and p.get("state")), key=lambda p: p["ts"]):
+        prev = states.get(p["mmsi"])
+        recent = prev is not None and p["ts"] - prev["ts"] <= gap
+        same = recent and p["state"] == prev["state"]
+        states[p["mmsi"]] = {"mmsi": p["mmsi"], "ts": p["ts"], "location": p["location"], "sog": p.get("sog"),
+                             "state": p["state"], "since": prev["since"] if same else p["ts"],
+                             "since_seen": prev["since_seen"] if same else recent}
+    return [s for s in states.values() if s["ts"] >= t - gap]
+
+
 def observations(positions):
     """Build routes and state events from sampled AIS positions.
 
