@@ -89,9 +89,16 @@ def dashboard():
         df, history_loader = replay_states(positions, now), lambda mmsi, hours: vessel_history(mmsi, hours, end=t)
     else:
         df, history_loader = load_states(get_db(), now), vessel_history
+    visible_states = [s for s in LABELS if st.session_state.get(f"show_{s}", True)]
     if df.empty:
         st.warning(f"No vessel heard from in the {config.STALE_MINUTES} minutes before {local(now):%H:%M}." if replay
                    else f"No vessel heard from in the last {config.STALE_MINUTES} minutes: is the ingestion running?")
+        if replay:  # keep the timeline, or t could not move away from an empty instant
+            # The map's slot in the full page (the warning takes the cards' place): in the same
+            # place the component stays mounted and keeps its t instead of jumping to the end.
+            left, _ = st.columns([2, 1], gap="medium")
+            with left:
+                replay_map(tracks, replay_static(), visible_states, commercial_only, show_tracks)
         return
 
     df["type"] = df["ship_type"].map(ship_category)
@@ -110,7 +117,6 @@ def dashboard():
     unseen = int((~anchored["seen"]).sum())
     state_cards(df["state"].value_counts(), anchored, unseen)
 
-    visible_states = [s for s in LABELS if st.session_state.get(f"show_{s}", True)]
     mapped = df[df["state"].isin(visible_states)]
     left, right = st.columns([2, 1], gap="medium")
     with left:

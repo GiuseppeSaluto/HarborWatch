@@ -611,3 +611,32 @@ def test_track_legend_says_fading_in_replay_and_dashed_in_live(dashboard):
     assert "dashed lines" in legend(dashboard) and "fading lines" not in legend(dashboard)
     switch_to_replay(dashboard)
     assert "fading lines" in legend(dashboard) and "dashed lines" not in legend(dashboard)
+
+
+def test_replay_without_vessels_at_t_keeps_the_component_so_t_can_move(open_dashboard):
+    # 777 heard for one step, then silent for longer than STALE_MINUTES, then heard again.
+    # A step inside the silence is in the cursor range but nobody was heard before it.
+    import math
+
+    import config
+
+    quiet = math.ceil(config.STALE_MINUTES / config.REPLAY_STEP_MINUTES) + 1
+    before_gap = REPLAY_BASE + step()
+    silent = before_gap + quiet * step()
+    last = silent + 2 * step()
+    app = open_dashboard(replay=anchored_every_minute(777, REPLAY_BASE, before_gap)
+                         + anchored_every_minute(777, silent + step(), last))
+    switch_to_replay(app)
+    assert app.metric, "with vessels at the last step the counters are expected"
+    app.session_state["replay-map"] = {"t": epoch(silent)}
+    app.run()
+    assert not app.exception
+    assert any("No vessel heard from" in text for text in card_texts(app))
+    assert replay_component(app) is not None, "the replay-map component must stay to move t"
+    assert not app.metric
+    # Back to an instant with vessels: the whole page returns.
+    app.session_state["replay-map"] = {"t": epoch(last)}
+    app.run()
+    assert not app.exception
+    assert app.metric
+    assert not any("No vessel heard from" in text for text in card_texts(app))
