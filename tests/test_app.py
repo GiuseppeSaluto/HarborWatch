@@ -556,3 +556,22 @@ def test_component_data_has_slider_limits_and_vessel_series(open_dashboard):
         [round(c, 5) for c in p["location"]["coordinates"]] for p in positions]
     assert vessel["states"] == [p["state"] for p in positions]
     assert vessel["sog"] == [p["sog"] for p in positions]
+
+
+def test_deck_version_matches_the_one_streamlit_bundles():
+    # Spec section 8 point 11, "Librerie": deck.gl refuses a second version in the same page, so
+    # the replay map must load the one st.pydeck_chart bundles. Read it from the installed
+    # Streamlit: deck.gl's own check compares `<version>` with globalThis.deck.VERSION.
+    import re
+    from pathlib import Path
+
+    import streamlit
+
+    import app_replay
+
+    pattern = re.compile(r"`(\d+\.\d+\.\d+)`,\w+=globalThis\.deck&&globalThis\.deck\.VERSION")
+    files = list(Path(streamlit.__file__).parent.glob("static/**/DeckGlJsonChart*.js"))
+    found = {v for f in files for v in pattern.findall(f.read_text(encoding="utf-8"))}
+    # No file or no match means the guard is blind: fail, never skip.
+    assert len(found) == 1, f"bundled deck.gl version not found or ambiguous in {files}: {found}"
+    assert app_replay.DECK_VERSION == found.pop()
