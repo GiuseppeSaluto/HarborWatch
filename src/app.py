@@ -13,9 +13,10 @@ from app_charts import chart_time, congestion_chart, fmt, fmt_age, gantt, legend
 from app_theme import ICONS, LABELS, RUNNING_ICON_CSS, header_grid_css, state_card_css
 from classify import COMMERCIAL, ship_category
 from diagnostics import diagnose, probe_stream
-from history import continuous_hours, hourly_series, longest_run, states_at, vessel_tracks
+from history import continuous_hours, hourly_series, longest_run, states_at, thin_positions, vessel_tracks
 from optimize import plan_berths, prepare, service_minutes, trusted_stay, usable_stays
-from app_vessel import select_map_vessel, vessel_card
+from app_replay import replay_map
+from app_vessel import open_vessel_details, select_map_vessel, vessel_card
 
 
 @st.cache_resource
@@ -74,13 +75,13 @@ def dashboard():
         st.error("Cannot reach MongoDB Atlas: open Status for the diagnosis.", icon=":material/cloud_off:")
         return
     if replay:
-        now = replay_time(positions)
+        tracks = replay_tracks(positions)
+        now = replay_time(tracks)
         st.info(f"Replay · {local(now):%a %d %b %H:%M %Z}: the port as it was then, not live data.",
                 icon=":material/history:")
-        df, tracks, history_loader = replay_states(positions, now), tracks_and_spans(positions, now), \
-            replay_history(positions, now)
+        df, history_loader = replay_states(positions, now), replay_history(positions, now)
     else:
-        df, tracks, history_loader = load_states(get_db(), now), None, vessel_history
+        df, history_loader = load_states(get_db(), now), vessel_history
     if df.empty:
         st.warning(f"No vessel heard from in the {config.STALE_MINUTES} minutes before {local(now):%H:%M}." if replay
                    else f"No vessel heard from in the last {config.STALE_MINUTES} minutes: is the ingestion running?")
@@ -107,9 +108,12 @@ def dashboard():
     left, right = st.columns([2, 1], gap="medium")
     with left:
         st.session_state["mapped-mmsis"] = mapped["mmsi"].tolist()
-        tracks = (tracks or recent_tracks()) if show_tracks else ([], {})
-        st.pydeck_chart(port_map(mapped, tracks), height=560,
-                        key="port-map", on_select=select_map_vessel, selection_mode="single-object")
+        if replay:
+            replay_map(tracks, replay_static(), visible_states, commercial_only, show_tracks)
+            replay_pick(df["mmsi"].tolist())
+        else:
+            st.pydeck_chart(port_map(mapped, recent_tracks() if show_tracks else ([], {})), height=560,
+                            key="port-map", on_select=select_map_vessel, selection_mode="single-object")
         if not visible_states:
             st.caption("All vessel states hidden. Select a card to show vessels.")
         st.caption(legend(mapped) + f" · dashed lines: last {config.TRACK_HOURS} h · circles: berth areas · "
@@ -370,14 +374,71 @@ def tracks_and_spans(positions, now):
     return vessel_tracks(positions, now), {m: last - first for m, (first, last) in spans.items()}
 
 
-# Shared by every visitor without a copy per rerun (cache_data would copy ~160 000 positions).
-# Known limit: the first replay visitor after each refresh waits for the whole week to load;
-# the upgrade is keeping only state changes plus each vessel's last position (spec section 8, point 11).
+# Shared by every visitor without a copy per rerun (cache_data would copy ~100 000 positions).
+# Known limit: the first visitor after each refresh waits for the whole week to load, also in Live,
+# which needs to know whether there is anything to replay.
 @st.cache_resource(ttl=config.REPLAY_CACHE_MINUTES * 60)
 def replay_positions():
-    """Every stored position with a state, for the replay."""
-    return list(get_db().positions.find(
+    """The stored positions the replay needs (thin_positions: states_at is unchanged by thinning).
+
+    Known limit: a vessel's last position can be up to REPLAY_KEEP_MINUTES older and REPLAY_MOVE_M
+    farther than the real one, so "Last signal" in the vessel card can read a few minutes more.
+    """
+    return thin_positions(get_db().positions.find(
         {"state": {"$exists": True}}, {"_id": 0, "mmsi": 1, "ts": 1, "location": 1, "sog": 1, "state": 1}))
+
+
+@st.cache_resource(max_entries=2)
+def _replay_tracks(_positions, key):
+    step = timedelta(minutes=config.REPLAY_STEP_MINUTES)
+    epoch = datetime(2000, 1, 1, tzinfo=UTC)
+    stamps = [p["ts"] for p in _positions]
+    first, last = (epoch + (t - epoch) // step * step for t in (min(stamps), max(stamps)))
+    t0 = int(first.timestamp())
+    by_vessel = {}
+    for p in sorted(_positions, key=lambda p: (p["mmsi"], p["ts"])):
+        by_vessel.setdefault(p["mmsi"], []).append(p)
+    vessels = [{"mmsi": mmsi,
+                "positions": [[round(c, 5) for c in p["location"]["coordinates"]] for p in fixes],
+                "times": [int(p["ts"].timestamp()) - t0 for p in fixes],
+                "states": [p["state"] for p in fixes], "sog": [p.get("sog") for p in fixes]}
+               for mmsi, fixes in by_vessel.items()]
+    return {"vessels": vessels, "t0": t0, "start": t0, "end": int(last.timestamp())}
+
+
+def replay_tracks(positions):
+    """The positions in the compact shape the replay map gets, per vessel, and the slider limits.
+
+    Cached: the same object on every rerun, so Streamlit does not send it to the browser again.
+    """
+    return _replay_tracks(positions, (id(positions), len(positions)))
+
+
+def replay_time(tracks):
+    """The replay's instant t: the replay map's state, else the last step; on the step grid."""
+    step = config.REPLAY_STEP_MINUTES * 60
+    t = (st.session_state.get("replay-map") or {}).get("t")
+    if t is None or not tracks["start"] <= t <= tracks["end"]:
+        t = tracks["end"]
+    t = tracks["start"] + (int(t) - tracks["start"]) // step * step
+    return pd.Timestamp(t, unit="s", tz="UTC")
+
+
+def replay_static():
+    """Tooltip data for the replay map: mmsi (as text, a JSON key) -> name, category, length."""
+    return {str(v["mmsi"]): {"name": v.get("name"), "category": ship_category(v.get("ship_type")),
+                             "length": v.get("length")} for v in vessel_static()}
+
+
+def replay_pick(on_map):
+    """A click on a vessel of the replay map opens its card, like select_map_vessel in Live."""
+    picked = (st.session_state.get("replay-map") or {}).get("picked")
+    # The state keeps the last click: act only when it changes.
+    if picked is not None and picked != st.session_state.get("replay-picked"):
+        st.session_state["replay-picked"] = picked
+        if picked in on_map:
+            st.session_state["detail-mmsi"] = picked
+            open_vessel_details()
 
 
 @st.cache_data(ttl=600)
@@ -385,18 +446,6 @@ def vessel_static():
     """Name, length, destination and AIS type of every vessel, for the replay."""
     return list(get_db().vessels.find({}, {"_id": 0, "mmsi": 1, "name": 1, "length": 1, "destination": 1,
                                            "ship_type": 1}))
-
-
-def replay_time(positions):
-    """The replay's instant t: a slider over the recorded week, on whole REPLAY_STEP_MINUTES."""
-    step = timedelta(minutes=config.REPLAY_STEP_MINUTES)
-    stamps = [p["ts"] for p in positions]
-    epoch = datetime(2000, 1, 1, tzinfo=UTC)
-    first, last = (epoch + (t - epoch) // step * step for t in (min(stamps), max(stamps)))
-    steps = [first + i * step for i in range((last - first) // step + 1)]
-    t = st.select_slider("Replay time", steps, value=steps[-1], key="replay-t", label_visibility="collapsed",
-                         format_func=lambda t: f"{local(t):%a %d %b %H:%M}")
-    return pd.Timestamp(t)
 
 
 def replay_states(positions, t):

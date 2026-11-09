@@ -826,3 +826,134 @@ def test_states_at_counts_a_position_exactly_at_t():
     assert set(rows) == {1, 2}
     assert (rows[1]["ts"], rows[1]["state"], rows[1]["since"]) == (REPLAY_T, "at_berth", REPLAY_T)
     assert rows[1]["location"]["coordinates"] == [8.9, 44.4]
+
+
+# --- thin_positions(positions) (replay step 2, spec section 8 point 11 and section 13) ----
+# Per vessel, in ts order, keep: first and last; a state different from the previous input
+# position; more than REPLAY_MOVE_M from the last kept; a position whose next one is more
+# than REPLAY_KEEP_MINUTES after the last kept. Exactly the threshold is not enough.
+# config.REPLAY_* are read inside the tests only, so this file imports without them.
+
+
+def keep():
+    return timedelta(minutes=config.REPLAY_KEEP_MINUTES)
+
+
+def thin_fix(mmsi, offset, state="anchored", east_m=0.0, north_m=0.0, sog=0.0):
+    """A stored position `offset` (a timedelta) after REPLAY_T, east_m / north_m from (LON0, LAT0)."""
+    return dict(mmsi=mmsi, ts=REPLAY_T + offset, sog=sog, state=state,
+                location={"type": "Point", "coordinates": at(east_m, north_m)})
+
+
+def kept(positions):
+    """Indices into `positions` of the dicts thin_positions returned, checking identity."""
+    result = history.thin_positions(positions)
+    index = {id(p): i for i, p in enumerate(positions)}
+    assert all(id(p) in index for p in result), "the same dicts as the input, not copies"
+    return [index[id(p)] for p in result]
+
+
+def test_thin_keeps_first_and_last_and_drops_the_rest_of_a_still_vessel():
+    step = keep() / 4
+    still = [thin_fix(1, i * step) for i in range(4)]
+    assert kept(still) == [0, 3]
+    assert kept(still[:1]) == [0]
+    assert kept([]) == []
+
+
+def test_thin_keeps_a_state_change_but_not_the_position_before_it():
+    step = keep() / 10
+    states = ["anchored", "anchored", "anchored", "at_berth", "at_berth", "anchored", "anchored"]
+    assert kept([thin_fix(1, i * step, s) for i, s in enumerate(states)]) == [0, 3, 5, 6]
+
+
+def test_thin_keeps_a_move_over_replay_move_m_from_the_last_kept_position():
+    # 0.4 * REPLAY_MOVE_M per step: never far from the previous position, but the third
+    # step is 1.2 * REPLAY_MOVE_M from the last kept one. North catches an east-only distance.
+    step = keep() / 10
+    for axis in ("east_m", "north_m"):
+        moving = [thin_fix(1, i * step, **{axis: i * 0.4 * config.REPLAY_MOVE_M}) for i in range(8)]
+        assert kept(moving) == [0, 3, 6, 7], axis
+
+
+def test_thin_exactly_replay_move_m_is_not_enough(monkeypatch):
+    # Dyadic latitudes make the north offset, and so the local-plane distance, exact in
+    # floating point however it is computed; REPLAY_MOVE_M is set to that distance as
+    # measured by coast_distance_m (spec: "distanza su piano locale, come coast_distance_m").
+    import classify
+
+    lon, lat = 8.875, 44.40625
+    exact, over = lat + 2 ** -11, lat + 2 ** -11 + 2 ** -16
+    distance = classify.coast_distance_m(lon, exact, [[[lon, lat], [lon, lat]]])
+    monkeypatch.setattr(config, "REPLAY_MOVE_M", distance)
+    step = keep() / 10
+    for target, expected in ((exact, [0, 3]), (over, [0, 1, 3])):
+        positions = [thin_fix(1, i * step) for i in range(4)]
+        for i, point_lat in enumerate([lat, target, target, target]):
+            positions[i]["location"]["coordinates"] = [lon, point_lat]
+        assert kept(positions) == expected, target
+
+
+def test_thin_keeps_a_position_when_the_next_is_over_replay_keep_minutes_from_the_last_kept():
+    # One position every REPLAY_KEEP_MINUTES / 4: the next of position 4 is 5 steps after
+    # position 0 (kept), the next of position 3 exactly REPLAY_KEEP_MINUTES (not enough).
+    step = keep() / 4
+    assert kept([thin_fix(1, i * step) for i in range(14)]) == [0, 4, 8, 12, 13]
+
+
+def test_thin_gap_over_stale_minutes_stays_and_no_new_gap_appears():
+    step = keep() / 4
+    gap = stale() + step
+    times = [i * step for i in range(8)] + [7 * step + gap + i * step for i in range(8)]
+    positions = [thin_fix(1, offset) for offset in times]
+    result = kept(positions)
+    assert result == [0, 4, 7, 8, 12, 15]
+    for a, b in zip(result, result[1:]):
+        if positions[b]["ts"] - positions[a]["ts"] > keep():
+            assert b == a + 1, (a, b)
+
+
+def test_thin_drops_positions_without_state():
+    step = keep() / 10
+    positions = [thin_fix(1, 0 * step), thin_fix(1, 1 * step), thin_fix(1, 2 * step, state=None),
+                 thin_fix(1, 3 * step), thin_fix(2, 0 * step), thin_fix(3, 0 * step)]
+    del positions[3]["state"]
+    positions[4]["state"] = None
+    del positions[5]["state"]
+    # Vessel 1's last position with a state is the second one: first and last of what is left.
+    assert kept(positions) == [0, 1]
+
+
+def test_thin_output_is_ordered_by_mmsi_then_ts():
+    step = keep() / 10
+    positions = [thin_fix(9, 2 * step, "underway"), thin_fix(3, 1 * step, "at_berth"),
+                 thin_fix(9, 0 * step, "anchored"), thin_fix(3, 3 * step, "anchored"),
+                 thin_fix(9, 1 * step, "at_berth"), thin_fix(3, 0 * step, "anchored")]
+    # Every position is a first, a last or a state change, so all are kept.
+    assert kept(positions) == [5, 1, 3, 2, 4, 0]
+
+
+def test_thin_positions_give_the_same_states_at_on_the_bundled_recording():
+    import gzip
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).parents[1] / "data/sample/positions-2026-10-15.jsonl.gz"
+    with gzip.open(path, "rt") as stream:
+        positions = [dict(mmsi=r["mmsi"], ts=datetime.fromisoformat(r["ts"].replace("Z", "+00:00")),
+                          sog=r["sog"], state=r["state"],
+                          location={"type": "Point", "coordinates": [r["lon"], r["lat"]]})
+                     for r in map(json.loads, stream)]
+    thinned = history.thin_positions(positions)
+    assert len(thinned) < len(positions)
+    first = min(p["ts"] for p in positions)
+    last = max(p["ts"] for p in positions)
+    instants = [first + (last - first) * k / 7 for k in range(8)] + [
+        first + timedelta(minutes=37, seconds=13), last - timedelta(hours=5, seconds=41)]
+    for t in instants:
+        expected = {r["mmsi"]: r for r in history.states_at(positions, t)}
+        actual = {r["mmsi"]: r for r in history.states_at(thinned, t)}
+        assert set(actual) == set(expected), t
+        for mmsi, row in expected.items():
+            assert ({k: actual[mmsi][k] for k in ("state", "since", "since_seen")}
+                    == {k: row[k] for k in ("state", "since", "since_seen")}), (t, mmsi)

@@ -111,6 +111,32 @@ def states_at(positions, t):
     return [s for s in states.values() if s["ts"] >= t - gap]
 
 
+
+def thin_positions(positions):
+    """The positions the replay needs: states_at gives the same states and since from them.
+
+    Per vessel, in time order: the first and last, every state change, every move over
+    REPLAY_MOVE_M from the last kept fix, and every fix whose next one is more than
+    REPLAY_KEEP_MINUTES after the last kept, so thinning never opens a gap that was not there.
+    Positions without a state are dropped. Same dicts as the input, by mmsi then ts.
+    """
+    keep_gap = timedelta(minutes=config.REPLAY_KEEP_MINUTES)
+    stated = sorted((p for p in positions if p.get("state")), key=lambda p: (p["mmsi"], p["ts"]))
+    kept = []
+    for _, group in itertools.groupby(stated, key=lambda p: p["mmsi"]):
+        fixes = list(group)
+        last = fixes[0]
+        kept.append(last)
+        for i, fix in enumerate(fixes[1:], start=1):
+            final = i == len(fixes) - 1
+            if (final or fix["state"] != fixes[i - 1]["state"]
+                    or _metres(last["location"]["coordinates"], fix["location"]["coordinates"]) > config.REPLAY_MOVE_M
+                    or fixes[i + 1]["ts"] - last["ts"] > keep_gap):
+                kept.append(fix)
+                last = fix
+    return kept
+
+
 def observations(positions):
     """Build routes and state events from sampled AIS positions.
 

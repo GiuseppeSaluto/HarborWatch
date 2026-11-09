@@ -60,6 +60,26 @@ def legend(df):
                       + [f"{shape(k)} {k}" for k in SVG if k in present])
 
 
+def berth_areas():
+    """One ring per berth area with its hover text; label is False where the name would not fit."""
+    by_area = {}
+    for b in config.BERTHS:
+        by_area.setdefault(b["zone"], []).append(b)
+    areas = [{
+        "position": [bs[0]["lon"], bs[0]["lat"]], "name": area,
+        "title": area,
+        "line1": f"{len(bs)} berth{'s' * (len(bs) > 1)}: {', '.join(str(b['length']) for b in bs)} m",
+        "line2": f"accepts {', '.join(bs[0]['categories'])}",
+    } for area, bs in by_area.items()]
+    # Direct labels only where they fit: the passenger terminals and SECH sit a few hundred
+    # metres apart, so their names would pile up; hovering their rings tells them apart.
+    km = lambda p, q: math.dist([p[0] * 111 * math.cos(math.radians(p[1])), p[1] * 111],
+                                [q[0] * 111 * math.cos(math.radians(q[1])), q[1] * 111])
+    for a in areas:
+        a["label"] = all(km(a["position"], b["position"]) > 1 for b in areas if b is not a)
+    return areas
+
+
 def port_map(df, tracks_and_spans):
     """Vessels shaped by category and colored by state, plus one ring per berth area; both explain
     themselves on hover."""
@@ -76,20 +96,8 @@ def port_map(df, tracks_and_spans):
         "line1": [f"{r['type']}, {known(r['length'], ' m')}" for _, r in df.iterrows()],
         "line2": [f"{LABELS[r['state']]}, {known(r['sog'], ' kn')}" for _, r in df.iterrows()],
     })
-    by_area = {}
-    for b in config.BERTHS:
-        by_area.setdefault(b["zone"], []).append(b)
-    areas = pd.DataFrame([{
-        "position": [bs[0]["lon"], bs[0]["lat"]], "name": area,
-        "title": area,
-        "line1": f"{len(bs)} berth{'s' * (len(bs) > 1)}: {', '.join(str(b['length']) for b in bs)} m",
-        "line2": f"accepts {', '.join(bs[0]['categories'])}",
-    } for area, bs in by_area.items()])
-    # Direct labels only where they fit: the passenger terminals and SECH sit a few hundred
-    # metres apart, so their names would pile up; hovering their rings tells them apart.
-    km = lambda p, q: math.dist([p[0] * 111 * math.cos(math.radians(p[1])), p[1] * 111],
-                                [q[0] * 111 * math.cos(math.radians(q[1])), q[1] * 111])
-    labeled = areas[[all(km(p, q) > 1 for q in areas["position"] if q is not p) for p in areas["position"]]]
+    areas = pd.DataFrame(berth_areas())
+    labeled = areas[areas["label"]]
     # Paths only for the vessels on the map, so the commercial-only toggle applies to them too.
     tracks, spans = tracks_and_spans
     shown = {r["mmsi"]: r for _, r in df.iterrows()}

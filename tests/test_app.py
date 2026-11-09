@@ -327,8 +327,13 @@ def test_replay_map_and_counters_come_from_states_at_with_static_data(dashboard)
     live_anchored = dashboard.metric[1].value
     switch_to_replay(dashboard)
     # 777 and 779 only exist in the replay positions; vessels 1-3 only in load_states.
-    # Both are commercial only through vessel_static(): without the join they would be hidden.
-    assert vessel_ids(dashboard) == {777, 779}
+    # Both are commercial only through vessel_static(): without the join they would not count.
+    # Step 2: the map is the replay-map component, so its data replaces the pydeck layers.
+    data = replay_data(dashboard)
+    assert {777, 779} <= {v["mmsi"] for v in data["vessels"]}
+    assert not {1, 2, 3} & {v["mmsi"] for v in data["vessels"]}
+    static = {int(mmsi): value for mmsi, value in data["static"].items()}
+    assert "Replay one" in json.dumps(static[777]) and "Replay two" in json.dumps(static[779])
     assert dashboard.metric[1].value == "2" != live_anchored
     # 778 has no static data: still a vessel at t (ship_type 0, the rest empty), so it can
     # be picked in the vessel search like any non-commercial vessel.
@@ -346,3 +351,147 @@ def test_without_positions_replay_cannot_be_used_and_page_stays_live(open_dashbo
     assert not replay_banners(app)
     assert vessel_ids(app) == {1, 2, 3}
     assert any("replay" in text.lower() for text in card_texts(app))
+
+
+# --- Replay step 2: the replay-map component (spec section 8 point 11, "Nomi per i test") --
+# A Streamlit v2 component shows up in the AppTest tree as an element of type
+# `bidi_component` with the widget key; the `data` it was given is the JSON in `proto.json`.
+# Its state is driven like the browser would with session_state["replay-map"] = {...}.
+
+
+def replay_component(app):
+    return next((node for node in app.get("bidi_component") if node.key == "replay-map"), None)
+
+
+def replay_data(app):
+    component = replay_component(app)
+    assert component is not None, "no replay-map component"
+    assert component.proto.json, "the component data is expected as JSON"
+    return json.loads(component.proto.json)
+
+
+def epoch(moment):
+    return int(moment.timestamp())
+
+
+def step():
+    import config
+    from datetime import timedelta
+
+    return timedelta(minutes=config.REPLAY_STEP_MINUTES)
+
+
+# Aligned to every REPLAY_STEP_MINUTES that divides an hour, like stored_positions().
+REPLAY_BASE = stored_positions()[0]["ts"]
+
+
+def anchored_every_minute(mmsi, start, end):
+    from datetime import timedelta
+
+    count = int((end - start) / timedelta(minutes=1)) + 1
+    return [dict(mmsi=mmsi, ts=start + timedelta(minutes=m), sog=0.0, state="anchored",
+                 location={"type": "Point", "coordinates": [8.85, 44.4]}) for m in range(count)]
+
+
+def local_time(moment):
+    from zoneinfo import ZoneInfo
+
+    import config
+
+    return moment.astimezone(ZoneInfo(config.TIMEZONE)).strftime("%H:%M")
+
+
+def test_replay_map_is_the_component_not_the_pydeck_chart(dashboard):
+    assert replay_component(dashboard) is None
+    switch_to_replay(dashboard)
+    assert replay_component(dashboard) is not None
+    assert len(dashboard.get("deck_gl_json_chart")) == 0
+    # Map and step-1 cursor become one component: the replay-t slider is gone.
+    assert widget(dashboard, "replay-t") is None
+
+
+def test_component_t_decides_counters_and_banner(open_dashboard):
+    # 777 anchored for three steps, 779 only during the last step: at the last step both count.
+    last = REPLAY_BASE + 3 * step()
+    app = open_dashboard(replay=anchored_every_minute(777, REPLAY_BASE, last)
+                         + anchored_every_minute(779, REPLAY_BASE + 2 * step(), last))
+    switch_to_replay(app)
+    assert app.metric[1].value == "2"
+    assert any(local_time(last) in banner for banner in replay_banners(app))
+    earlier = REPLAY_BASE + step()
+    app.session_state["replay-map"] = {"t": epoch(earlier)}
+    app.run()
+    assert not app.exception
+    assert app.metric[1].value == "1"
+    banners = replay_banners(app)
+    assert any(local_time(earlier) in banner for banner in banners)
+    assert not any(local_time(last) in banner for banner in banners)
+
+
+def test_component_pick_opens_vessel_card_and_leaves_dropdown_usable(dashboard):
+    last = max(p["ts"] for p in stored_positions())
+    switch_to_replay(dashboard)
+    dashboard.session_state["replay-map"] = {"t": epoch(last), "picked": 777}
+    dashboard.run()
+    assert not dashboard.exception
+    assert dashboard.selectbox(key="detail-mmsi").value == 777
+    assert any(h.value == "Replay one" for h in dashboard.subheader)
+    dashboard.selectbox(key="detail-mmsi").select(779).run()
+    assert not dashboard.exception
+    assert dashboard.selectbox(key="detail-mmsi").value == 779
+
+
+def shown_names(data):
+    """Every string in `shown`, whatever its layout (list, dict of lists, ...)."""
+    def walk(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if item is True:
+                    yield key
+                elif item is not False:
+                    yield from walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                yield from walk(item)
+
+    return set(walk(data["shown"]))
+
+
+def test_component_data_follows_commercial_toggle_and_state_filters(dashboard):
+    from classify import ship_category
+
+    states = {"at_berth", "anchored", "underway"}
+    categories = {ship_category(code) for code in range(0, 101)}
+    commercial = {ship_category(code) for code in (60, 70, 80)}
+    switch_to_replay(dashboard)
+    shown = shown_names(replay_data(dashboard))
+    assert shown & states == states
+    assert shown & categories == commercial
+    dashboard.button(key="map-anchored").click().run()
+    assert shown_names(replay_data(dashboard)) & states == states - {"anchored"}
+    next(t for t in dashboard.toggle if "ommercial" in t.label).set_value(False).run()
+    shown = shown_names(replay_data(dashboard))
+    assert shown & categories == categories
+    assert shown & states == states - {"anchored"}
+
+
+def test_component_data_has_slider_limits_and_vessel_series(open_dashboard):
+    # First position inside the first step, last inside the fourth: the cursor runs from the
+    # first rounded down to the last rounded down. Alternating states, so thinning keeps all.
+    offsets = [0.3, 1.2, 2.5, 3.7]
+    positions = [dict(mmsi=777, ts=REPLAY_BASE + step() * k, sog=float(i),
+                      state=("anchored", "underway")[i % 2],
+                      location={"type": "Point", "coordinates": [8.85 + i / 1000, 44.4 + i / 1000]})
+                 for i, k in enumerate(offsets)]
+    app = open_dashboard(replay=positions)
+    switch_to_replay(app)
+    data = replay_data(app)
+    assert (data["start"], data["end"]) == (epoch(REPLAY_BASE), epoch(REPLAY_BASE + 3 * step()))
+    vessel = next(v for v in data["vessels"] if v["mmsi"] == 777)
+    assert [round(data["t0"] + s) for s in vessel["times"]] == [epoch(p["ts"]) for p in positions]
+    assert [[round(c, 5) for c in point] for point in vessel["positions"]] == [
+        [round(c, 5) for c in p["location"]["coordinates"]] for p in positions]
+    assert vessel["states"] == [p["state"] for p in positions]
+    assert vessel["sog"] == [p["sog"] for p in positions]

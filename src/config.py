@@ -90,3 +90,9 @@ ARCHIVE_MINUTES = 10
 # and the positions behind it are read again at most this often.
 REPLAY_STEP_MINUTES = 10
 REPLAY_CACHE_MINUTES = 10
+# The replay timeline's helm turns once every REPLAY_TURN_HOURS of port time.
+REPLAY_TURN_HOURS = 12
+# Positions kept for the replay (history.thin_positions): a vessel's state changes, moves over
+# REPLAY_MOVE_M metres, and enough fixes that no REPLAY_KEEP_MINUTES pass without one.
+REPLAY_KEEP_MINUTES = 10
+REPLAY_MOVE_M = 50
