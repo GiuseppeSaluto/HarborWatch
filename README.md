@@ -12,6 +12,8 @@ Real-time port congestion monitor and berth allocation optimizer for the Port of
 - **Tracks congestion over time.** An hourly series of commercial vessels at anchor, with gaps where no data was collected rather than misleading zeros.
 - **Proposes a berth plan.** A constraint-programming model (OR-Tools CP-SAT) assigns every waiting vessel a compatible berth and a mooring time, minimizing the total wait, around the vessels already moored.
 - **Says how far to trust itself.** A status badge and panel show data freshness, continuous collection time, which stay durations are measured and which are still defaults, and database usage. Vessels the plan cannot place are listed, not dropped.
+- **Explains any vessel.** Clicking a vessel on the map, or searching it by name or MMSI, opens its card: type and length, state and how long it has been in it, the last signal, its proposed berth or the reason it is not in the plan, and its route over the last 3 hours, 24 hours or 7 days with the observed state changes and data gaps.
+- **Replays the recorded week.** A Live/Replay switch shows the port as it was at any past moment of the stored positions: a timeline under the map, with a helm for a thumb, moves the vessels in the browser while dragging, and on release the counters, the anchorage list, the chart, the berth plan and the vessel card follow, using only data up to that moment.
 - **Diagnoses its own outages.** When data stop, the Status panel tells which link broke: the database, the ingestion, or the AIS feed itself (no coverage over the port, or the service down).
 
 Hovering the map shows each vessel's name, type, length, state and speed, and each berth area's berths and accepted vessel types:
@@ -50,7 +52,9 @@ cp .env.example .env           # then fill in AISSTREAM_API_KEY and MONGODB_URI
 ./run.sh
 ```
 
-`run.sh` asks what to start: `0` the ingestion in the background plus the dashboard at http://localhost:8501, or `1` (the default) the dashboard alone, when the ingestion runs on another machine. Ctrl+C stops everything. Some public networks block outbound port 27017, which makes Atlas unreachable.
+`run.sh` asks what to start: `0` the ingestion in the background plus the dashboard at http://localhost:8501, or `1` the dashboard alone, when the ingestion runs on another machine. There is no default, so an Enter pressed by habit cannot start a second ingestion. Ctrl+C stops everything.
+
+The database is `harborwatch` unless `MONGODB_DB` in `.env` names another one, for instance a local copy of the data (`MONGODB_URI=mongodb://localhost:27017`) to develop on. It moves the dashboard and the ingestion started by `run.sh` alike, so change it only on a machine that does not ingest. Some public networks block outbound port 27017, which makes Atlas unreachable.
 
 ## Tests
 
@@ -58,7 +62,7 @@ cp .env.example .env           # then fill in AISSTREAM_API_KEY and MONGODB_URI
 pytest
 ```
 
-The suite runs about two seconds, without network or database, on every push (GitHub Actions, Python 3.12 and 3.14). It covers message validation, classification thresholds and the coastline distance, the berth data, the optimizer (expected optima checked by brute force on small cases), berth occupancy, stay measurement, the hourly history behind the charts and the map icons. The tests are written by a separate agent from the specification alone, without reading the implementation; the code adapts to them. Three integration scripts in `tests/integration/` run by hand against a real MongoDB, on a throwaway collection: the aggregation finding the stays must agree with the tested Python definition, the hourly congestion aggregation with a count done in Python, and the pipeline update that tracks when each vessel's state began must handle new vessels, state changes and gaps.
+The suite runs in about five seconds, without network or database, on every push (GitHub Actions, Python 3.12 and 3.14). It covers message validation, classification thresholds and the coastline distance, the berth data, the optimizer (expected optima checked by brute force on small cases), berth occupancy, stay measurement, the hourly history behind the charts, the replay (the port's state at a past moment and the thinned positions behind it), the outage diagnosis, the map icons, and the dashboard itself through Streamlit's AppTest (vessel card, Live and Replay, Atlas unreachable). The tests are written by a separate agent from the specification alone, without reading the implementation; the code adapts to them. Three integration scripts in `tests/integration/` run by hand against a real MongoDB, on a throwaway collection: the aggregation finding the stays must agree with the tested Python definition, the hourly congestion aggregation with a count done in Python, and the pipeline update that tracks when each vessel's state began must handle new vessels, state changes and gaps.
 
 ## Known limitations
 
@@ -70,7 +74,16 @@ The suite runs about two seconds, without network or database, on every push (Gi
 ## Project layout
 
 ```
-src/        ingest.py, classify.py, optimize.py, history.py, app.py, config.py
+src/        ingest.py       AIS client: validation, sampling, batched writes
+            classify.py     vessel state and category
+            history.py      stays, hourly series, archives, replay state at a moment
+            optimize.py     berth plan (OR-Tools CP-SAT)
+            diagnostics.py  why data stopped
+            icons.py        map icons per vessel category
+            app.py          Streamlit dashboard; app_charts.py, app_replay.py,
+                            app_vessel.py, app_theme.py: its map, charts, replay
+                            timeline, vessel card and theme
+            config.py       thresholds and settings
 data/       coastline.json (OSM coastline), berths.json (berths of the port)
   sample/   one week of collected data, readable without a database
 tests/      one test file per module with non-trivial logic
