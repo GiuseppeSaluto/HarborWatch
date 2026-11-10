@@ -514,6 +514,8 @@ def replay_pick(on_map):
 @st.cache_data(ttl=600)
 def vessel_static():
     """Name, length, destination and AIS type of every vessel, for the replay."""
+    # Known limit: static data has no history, so at a past t a vessel shows the name, length
+    # and type received last, even if they arrived after t; no count or state changes.
     return list(get_db().vessels.find({}, {"_id": 0, "mmsi": 1, "name": 1, "length": 1, "destination": 1,
                                            "ship_type": 1}))
 

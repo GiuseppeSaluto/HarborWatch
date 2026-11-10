@@ -611,3 +611,32 @@ def test_prepare_moored_ship_of_unknown_length_occupies_no_berth():
         # The berth stays free for the next moored ship in the given order.
         _, berths, _ = run_prepare([moored, later], [pberth("A", *GENOA)])
         assert berths["A"]["occupied_by"] == 2, length
+
+
+# --- prepare: missing since_seen (spec section 13, 2026-11-10) -----------------------------
+
+
+def _moored_free_from(since_seen):
+    """free_from of berth A for one moored cargo ship, 100 min after since, stay 1000 min.
+
+    since_seen is True, False, or "absent" (the key is removed from the vessel dict).
+    """
+    service = dict(config.SERVICE_MINUTES, cargo=1000)
+    v = vessel(9, state="at_berth", since_minutes_ago=100, since_seen=bool(since_seen))
+    if since_seen == "absent":
+        del v["since_seen"]
+    _, out_berths, _ = optimize.prepare([v], [pberth("A", *GENOA)], NOW, service=service)
+    return {b["name"]: b for b in out_berths}["A"]["free_from"]
+
+
+def test_prepare_moored_ship_without_since_seen_occupies_half_stay():
+    # Spec section 13: a missing since_seen counts as false -> half stay:
+    # 1000 // 2 - 100 = 400, not the full-stay 1000 - 100 = 900.
+    assert _moored_free_from("absent") == 400
+
+
+def test_prepare_missing_since_seen_matches_false_and_differs_from_true():
+    assert _moored_free_from(True) == 900
+    assert _moored_free_from(False) == 400
+    assert _moored_free_from("absent") == _moored_free_from(False)
+    assert _moored_free_from("absent") != _moored_free_from(True)

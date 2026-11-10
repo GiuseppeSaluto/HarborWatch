@@ -149,7 +149,7 @@ def prepare(vessels, berths, now, service=None):
         # Arrival not seen (e.g. moored before the ingestion started): assume it was halfway
         # through its stay when we first saw it, instead of just arrived.
         # Known limit: a coin-flip guess; the upgrade is reading the arrival from the history.
-        leaves = v["since"] + timedelta(minutes=stay if v.get("since_seen", True) else stay / 2)
+        leaves = v["since"] + timedelta(minutes=stay if v.get("since_seen", False) else stay / 2)
         berth["free_from"] = max(0, int((leaves - now).total_seconds() // 60))
     ships, unfit = [], []
     for v in vessels:
