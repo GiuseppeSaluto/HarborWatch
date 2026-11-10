@@ -286,6 +286,11 @@ def test_ingestion_continues_after_malformed_messages(monkeypatch):
     stored = db.log[0][2]
     assert len(stored) == 1
     assert stored[0]["mmsi"] == MMSI
+    # Spec section 6 and section 8 point 13: every flush writes one `sources` doc
+    # per source seen, `_id` = source, and AISStream positions have source `aisstream`.
+    # Assumption: the write's repr shows the `_id` filter (pymongo UpdateOne/ReplaceOne).
+    assert any(entry[0] == "sources" and "'_id': 'aisstream'" in repr(entry[2])
+               for entry in db.log)
     client.close.assert_awaited_once()
 
 
@@ -318,6 +323,8 @@ class FakeDb:
         self.positions = FakeCollection("positions", self.log)
         self.vessels = FakeCollection("vessels", self.log)
         self.states = FakeCollection("states", self.log)
+        self.sources = FakeCollection("sources", self.log)
+        self.source_stats = FakeCollection("source_stats", self.log)
 
     def __getitem__(self, name):
         return getattr(self, name)

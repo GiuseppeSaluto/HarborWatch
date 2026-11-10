@@ -7,7 +7,8 @@ from pathlib import Path
 # Secrets come from the environment (.env, never committed).
 # os.environ[...] fails fast with a KeyError if a variable is missing.
 AISSTREAM_API_KEY = os.environ["AISSTREAM_API_KEY"]
-OPENWATERS_TOKEN = os.environ["OPENWATERS_TOKEN"]
+# Optional: without it the ingestion reads AISStream only.
+OPENWATERS_TOKEN = os.environ.get("OPENWATERS_TOKEN", "")
 MONGODB_URI = os.environ["MONGODB_URI"]
 
 # Another database on the same server, e.g. a local copy of the data for the replay.

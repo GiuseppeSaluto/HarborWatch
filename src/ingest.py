@@ -1,4 +1,4 @@
-"""Connect to AISStream and write to MongoDB."""
+"""Connect to AISStream and Open Waters AIS and write to MongoDB."""
 
 import asyncio
 import json
@@ -9,7 +9,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import websockets
-from pymongo import ASCENDING, GEOSPHERE, AsyncMongoClient, UpdateOne
+from pymongo import ASCENDING, GEOSPHERE, AsyncMongoClient, ReplaceOne, UpdateOne
 from pymongo.errors import BulkWriteError, PyMongoError
 
 import config
@@ -238,82 +238,175 @@ async def safe_flush(db, positions, vessels, states):
         log.warning("flush failed, keeping %d positions in memory: %s", len(positions), exc)
 
 
+AISSTREAM_INFO = {"source": "aisstream", "license": "aisstream-io-terms",
+                  "attribution": "AISStream (https://aisstream.io)"}
+
+
+def from_aisstream(frame):
+    """An AISStream frame as (msg, info) for the queue, or None for an error frame."""
+    if isinstance(frame, dict) and "error" in frame:
+        log.error("AISStream: %s", frame["error"])
+        return None
+    return frame, AISSTREAM_INFO
+
+
+def from_openwaters_frame(frame):
+    """An Open Waters frame as (msg, info) for the queue: welcome and error frames are logged."""
+    kind = frame.get("type") if isinstance(frame, dict) else None
+    if kind == "welcome":
+        log.info("Open Waters limits: %s", frame.get("limits"))
+    elif kind == "error":
+        log.error("Open Waters: %s", frame)
+    return from_openwaters(frame)
+
+
+async def read_feed(name, url, subscription, unwrap, queue, headers=None):
+    """Read one AIS feed forever, putting (msg, info) on the queue; reconnect when it drops."""
+    # Iterating over connect() reconnects automatically on network errors.
+    async for ws in (websockets.connect(url, additional_headers=headers) if headers else websockets.connect(url)):
+        try:
+            await ws.send(json.dumps(subscription))
+            log.info("subscribed to %s", name)
+            while True:
+                try:
+                    async with asyncio.timeout(SILENCE_S):
+                        message = await ws.recv()
+                except TimeoutError:
+                    log.warning("%s: no message for %d s, reconnecting", name, SILENCE_S)
+                    await ws.close()
+                    break
+                try:
+                    item = unwrap(json.loads(message))
+                except json.JSONDecodeError:
+                    log.warning("invalid %s JSON, skipping message", name)
+                    continue
+                if item:
+                    await queue.put(item)
+        except websockets.ConnectionClosed as exc:
+            log.warning("%s: connection closed (%s), reconnecting in %d s", name, exc, RECONNECT_DELAY_S)
+        # Also reached when the server closes cleanly and the inner loop just ends.
+        await asyncio.sleep(RECONNECT_DELAY_S)
+
+
+async def write_sources(db, sources, hour, counts):
+    """Each source's credits and last message, and the finished hour's per-feed stats if any."""
+    if sources:
+        await db.sources.bulk_write([UpdateOne({"_id": k}, {"$set": v}, upsert=True) for k, v in sources.items()])
+    if hour is not None:
+        await db.source_stats.bulk_write([ReplaceOne({"_id": d["_id"]}, d, upsert=True)
+                                          for d in hour_stats(hour, counts)])
+
+
+async def consume(db, queue):
+    """The only writer: sampling, states and flushes for the messages of every feed."""
+    # Outside the readers: buffers and sampling survive a dropped connection, and one
+    # last_saved for all feeds keeps one position per vessel per minute, the first to arrive.
+    positions, vessels, states, last_saved = [], {}, [], {}
+    sources, counts = {}, {}
+    hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    last_flush = time.monotonic()
+    last_stats = last_archive = -math.inf  # log storage and archive at the first flush
+    try:
+        while True:
+            item = await queue.get()
+            if item is None:  # main is shutting down: everything queued before is handled
+                break
+            msg, info = item
+            feed = info["source"].split(":")[0]
+            now = datetime.now(UTC)
+            sources[info["source"]] = {"feed": feed, "license": info["license"],
+                                       "attribution": info["attribution"], "last_message": now}
+            if now - hour >= timedelta(hours=1):
+                # Known limit: an ingestion restart mid-hour rewrites that hour with the
+                # counts since the restart only (vessel sets cannot be added up).
+                try:
+                    await write_sources(db, {}, hour, counts)
+                except PyMongoError as exc:
+                    log.warning("source stats of %s lost: %s", hour, exc)
+                hour, counts = now.replace(minute=0, second=0, microsecond=0), {}
+            parsed = parse(msg)
+            if parsed:
+                collection, doc = parsed
+                if collection == "positions":
+                    c = counts.setdefault(feed, {"messages": 0, "kept": 0, "mmsis": set()})
+                    c["messages"] += 1
+                    c["mmsis"].add(doc["mmsi"])
+                    if keep_position(doc, last_saved):
+                        c["kept"] += 1
+                        fields = state_fields(doc)
+                        # The state in each position lets measure_stays read the history
+                        # without classifying it again.
+                        positions.append({**doc, "state": fields["state"], "source": info["source"]})
+                        states.append(state_update(fields))
+                else:
+                    # Dict keyed by mmsi: only the latest static data per vessel is written.
+                    vessels[doc["mmsi"]] = UpdateOne({"mmsi": doc["mmsi"]}, {"$set": doc}, upsert=True)
+            # Known limit: flush is checked only when a message arrives; fine for a busy port.
+            if time.monotonic() - last_flush >= config.FLUSH_SECONDS:
+                await safe_flush(db, positions, vessels, states)
+                try:
+                    await write_sources(db, sources, None, counts)
+                except PyMongoError as exc:
+                    log.warning("sources update failed: %s", exc)
+                last_flush = time.monotonic()
+                if last_flush - last_stats >= config.STATS_SECONDS:
+                    try:
+                        await log_storage(db)
+                    except PyMongoError as exc:
+                        log.warning("storage check failed: %s", exc)
+                    last_stats = last_flush
+                if last_flush - last_archive >= config.ARCHIVE_MINUTES * 60:
+                    try:
+                        await archive(db, datetime.now(UTC))
+                    except PyMongoError as exc:
+                        log.warning("archive failed, retrying in %d min: %s", config.ARCHIVE_MINUTES, exc)
+                    last_archive = last_flush
+    finally:
+        # Ctrl+C or SIGTERM: write what is still in memory before exiting.
+        log.info("shutting down, final flush")
+        await safe_flush(db, positions, vessels, states)
+        try:
+            await write_sources(db, sources, hour, counts)
+        except PyMongoError as exc:
+            log.warning("final sources update failed: %s", exc)
+
+
 async def main():
     client = AsyncMongoClient(config.MONGODB_URI)
     db = client[config.DB_NAME]
     await ensure_indexes(db)
 
     # systemd, docker and `timeout` stop a process with SIGTERM: treat it like Ctrl+C,
-    # so the finally block below still writes the buffers. (Unix only.)
+    # so the consumer's finally block still writes the buffers. (Unix only.)
     asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, asyncio.current_task().cancel)
 
-    # Outside the reconnect loop: buffers and sampling survive a dropped connection.
-    positions, vessels, states, last_saved = [], {}, [], {}
-    last_flush = time.monotonic()
-    last_stats = last_archive = -math.inf  # log storage and archive at the first flush
+    # The feeds only read and queue; one consumer writes, so a flush waiting on Atlas
+    # never sees a buffer grow under it and clear() drop positions it did not write.
+    queue = asyncio.Queue()
+    (lat0, lon0), (lat1, lon1) = config.BOUNDING_BOX
+    consumer = asyncio.create_task(consume(db, queue))
+    readers = [asyncio.create_task(read_feed("AISStream", AISSTREAM_URL, {
+        "APIKey": config.AISSTREAM_API_KEY,
+        "BoundingBoxes": [config.BOUNDING_BOX],  # a list of boxes
+        "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
+    }, from_aisstream, queue))]
+    if config.OPENWATERS_TOKEN:
+        readers.append(asyncio.create_task(read_feed("Open Waters", OPENWATERS_URL, {
+            "type": "subscribe", "bbox": [[min(lat0, lat1), min(lon0, lon1), max(lat0, lat1), max(lon0, lon1)]],
+        }, from_openwaters_frame, queue, {"Authorization": f"Bearer {config.OPENWATERS_TOKEN}"})))
     try:
-        # Iterating over connect() reconnects automatically on network errors.
-        async for ws in websockets.connect(AISSTREAM_URL):
-            try:
-                await ws.send(json.dumps({
-                    "APIKey": config.AISSTREAM_API_KEY,
-                    "BoundingBoxes": [config.BOUNDING_BOX],  # a list of boxes
-                    "FilterMessageTypes": ["PositionReport", "ShipStaticData"],
-                }))
-                log.info("subscribed to AISStream")
-                while True:
-                    try:
-                        async with asyncio.timeout(SILENCE_S):
-                            message = await ws.recv()
-                    except TimeoutError:
-                        log.warning("no message for %d s, reconnecting", SILENCE_S)
-                        await ws.close()
-                        break
-                    try:
-                        msg = json.loads(message)
-                    except json.JSONDecodeError:
-                        log.warning("invalid AISStream JSON, skipping message")
-                        continue
-                    parsed = parse(msg)
-                    if isinstance(msg, dict) and "error" in msg:
-                        log.error("AISStream: %s", msg["error"])
-                    if parsed:
-                        collection, doc = parsed
-                        if collection == "positions" and keep_position(doc, last_saved):
-                            fields = state_fields(doc)
-                            # The state in each position lets measure_stays read the history
-                            # without classifying it again.
-                            positions.append({**doc, "state": fields["state"]})
-                            states.append(state_update(fields))
-                        elif collection == "vessels":
-                            # Dict keyed by mmsi: only the latest static data per vessel is written.
-                            vessels[doc["mmsi"]] = UpdateOne({"mmsi": doc["mmsi"]}, {"$set": doc}, upsert=True)
-                    # Known limit: flush is checked only when a message arrives; fine for a busy port.
-                    # Awaiting it here keeps the buffers single-writer; incoming messages just
-                    # queue in the websocket meanwhile.
-                    if time.monotonic() - last_flush >= config.FLUSH_SECONDS:
-                        await safe_flush(db, positions, vessels, states)
-                        last_flush = time.monotonic()
-                        if last_flush - last_stats >= config.STATS_SECONDS:
-                            try:
-                                await log_storage(db)
-                            except PyMongoError as exc:
-                                log.warning("storage check failed: %s", exc)
-                            last_stats = last_flush
-                        if last_flush - last_archive >= config.ARCHIVE_MINUTES * 60:
-                            try:
-                                await archive(db, datetime.now(UTC))
-                            except PyMongoError as exc:
-                                log.warning("archive failed, retrying in %d min: %s", config.ARCHIVE_MINUTES, exc)
-                            last_archive = last_flush
-            except websockets.ConnectionClosed as exc:
-                log.warning("connection closed (%s), reconnecting in %d s", exc, RECONNECT_DELAY_S)
-            # Also reached when the server closes cleanly and the inner loop just ends.
-            await asyncio.sleep(RECONNECT_DELAY_S)
+        # None of them ends on its own: whichever does (an error, a cancel) stops the ingestion.
+        done, _ = await asyncio.wait([consumer, *readers], return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()  # re-raise why it stopped
     finally:
-        # Ctrl+C or SIGTERM: write what is still in memory before exiting.
-        log.info("shutting down, final flush")
-        await safe_flush(db, positions, vessels, states)
+        # Also on SIGTERM or Ctrl+C: stop reading, let the consumer write what is queued, then close.
+        for task in readers:
+            task.cancel()
+        queue.put_nowait(None)
+        (result,) = await asyncio.gather(consumer, return_exceptions=True)
+        if isinstance(result, Exception):  # its last writes failed: say so before exiting
+            log.error("consumer stopped with %r", result)
         await client.close()
 
 
