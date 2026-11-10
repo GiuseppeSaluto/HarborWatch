@@ -17,6 +17,9 @@ from classify import COMMERCIAL, classify, coast_distance_m, ship_category
 from history import archive_since, congestion_pipeline, stays_pipeline, vessel_groups
 
 AISSTREAM_URL = "wss://stream.aisstream.io/v0/stream"
+# Open Waters' native stream: unlike its AISStream-compatible /v0, every event names its source.
+OPENWATERS_URL = "wss://ais.openwaters.io/v1/stream"
+FEEDS = ("aisstream", "openwaters")
 
 # Pause before reconnecting after a connection that worked and then dropped.
 # Failed connection attempts already back off exponentially inside websockets.
@@ -74,6 +77,35 @@ def parse(msg):
         return None
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
+
+
+def from_openwaters(event):
+    """An Open Waters /v1 event as the AISStream message parse() validates, plus its source info.
+
+    Returns (msg, info), or None for other frames and events missing what parse needs.
+    """
+    try:
+        if event.get("type") != "event" or any(event.get(k) is None for k in
+                                                ("msg_type", "message", "mmsi", "time", "source")):
+            return None
+        ts = datetime.fromisoformat(event["time"])
+        ts = ts.astimezone(UTC) if ts.tzinfo else ts.replace(tzinfo=UTC)  # the stream sends UTC
+    except (AttributeError, TypeError, ValueError):
+        return None
+    kind = event["msg_type"]
+    msg = {"MessageType": kind, "Message": {kind: event["message"]},
+           "MetaData": {"MMSI": event["mmsi"], "time_utc": f"{ts:%Y-%m-%d %H:%M:%S} +0000 UTC"}}
+    return msg, {"source": f"openwaters:{event['source']}", "license": event.get("license"),
+                 "attribution": event.get("attribution")}
+
+
+def hour_stats(hour, counts):
+    """The source_stats documents of one hour: one per feed, with the vessels only it heard."""
+    empty = {"messages": 0, "kept": 0, "mmsis": set()}
+    a, b = (counts.get(feed, empty) for feed in FEEDS)
+    return [{"_id": {"hour": hour, "feed": feed}, "messages": c["messages"], "kept": c["kept"],
+             "vessels": len(c["mmsis"]), "only": len(c["mmsis"] - other["mmsis"])}
+            for feed, c, other in ((FEEDS[0], a, b), (FEEDS[1], b, a))]
 
 
 def keep_position(doc, last_saved):

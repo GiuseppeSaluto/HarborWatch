@@ -49,6 +49,17 @@ def rgb(hex_color):
     return [int(hex_color[i:i + 2], 16) for i in (1, 3, 5)]
 
 
+def credits(sources, since):
+    """The data credit line: each attribution part once, sources in _id order (aisstream first)."""
+    parts = {}
+    for s in sorted(sources, key=lambda s: s["_id"]):
+        if s["last_message"] >= since:
+            for part in (s.get("attribution") or "").split(". "):
+                if part := part.strip().rstrip("."):
+                    parts.setdefault(part, None)
+    return " · ".join(parts)
+
+
 def map_view(user_agent):
     """The maps' initial view: farther out on a phone, so Pra' and the centre both fit in 360 px.
 

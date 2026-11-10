@@ -1,8 +1,11 @@
-"""Tests for app_charts.map_view: the initial map view on a phone (spec section 8 point 9,
-"Vista della mappa sul telefono (2026-11-10)", and section 10).
+"""Tests for app_charts.map_view, the initial map view on a phone (spec section 8 point 9,
+"Vista della mappa sul telefono (2026-11-10)"), and app_charts.credits, the data credits
+line (section 8 point 13); see section 10.
 
 No external services needed.
 """
+
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -42,3 +45,54 @@ def test_non_phone_view_is_one_and_closer_than_phone():
     zooms = {view["zoom"] for view in views}
     assert len(zooms) == 1, f"desktop, empty and missing User-Agent differ: {zooms}"
     assert zooms.pop() > app_charts.map_view(IPHONE_SAFARI)["zoom"]
+
+
+# --- app_charts.credits (spec section 8 point 13 and section 13) -----------------------------
+
+SINCE = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+OWA = "Open Waters AIS (https://openwaters.io/ais/)"
+AISHUB = "AISHub (https://www.aishub.net)"
+
+
+def source(_id, attribution, last_message=SINCE, feed=None):
+    doc = {"_id": _id, "feed": feed or ("aisstream" if _id == "aisstream" else "openwaters"),
+           "license": "x", "last_message": last_message}
+    if attribution is not ...:
+        doc["attribution"] = attribution
+    return doc
+
+
+def test_credits_counts_sources_heard_since_the_boundary():
+    sources = [source("aisstream", "AISStream (https://aisstream.io)", SINCE),
+               source("openwaters:aishub", f"{OWA}. {AISHUB}", SINCE - timedelta(seconds=1))]
+    assert app_charts.credits(sources, SINCE) == "AISStream (https://aisstream.io)"
+
+
+def test_credits_repeated_parts_appear_once():
+    sources = [source("openwaters:aishub", f"{OWA}. {AISHUB}"),
+               source("openwaters:station:ed25519:sFTMPfTZJVC0ka6a3tnOSP9ykFvW3YP5oSKZ9QdzUDo", OWA)]
+    assert app_charts.credits(sources, SINCE) == f"{OWA} · {AISHUB}"
+
+
+def test_credits_order_is_aisstream_then_other_sources_by_id():
+    # Input order differs from the expected one, so keeping the list order is caught.
+    sources = [source("openwaters:station:ed25519:sFTMPfTZJVC0ka6a3tnOSP9ykFvW3YP5oSKZ9QdzUDo", OWA),
+               source("openwaters:aisstream", f"{OWA}. aisstream.io"),
+               source("aisstream", "AISStream (https://aisstream.io)"),
+               source("openwaters:aishub", f"{OWA}. {AISHUB}")]
+    assert app_charts.credits(sources, SINCE) == (
+        f"AISStream (https://aisstream.io) · {OWA} · {AISHUB} · aisstream.io")
+
+
+def test_credits_source_without_attribution_adds_nothing():
+    # None too: from_openwaters gives attribution None when the event has none.
+    for attribution in (..., "", None):
+        sources = [source("openwaters:aishub", f"{OWA}. {AISHUB}"),
+                   source("openwaters:other", attribution)]
+        assert app_charts.credits(sources, SINCE) == f"{OWA} · {AISHUB}", attribution
+
+
+def test_credits_is_empty_without_sources():
+    assert app_charts.credits([], SINCE) == ""
+    old = [source("aisstream", "AISStream (https://aisstream.io)", SINCE - timedelta(days=1))]
+    assert app_charts.credits(old, SINCE) == ""

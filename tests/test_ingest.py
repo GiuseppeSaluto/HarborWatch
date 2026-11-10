@@ -501,3 +501,144 @@ def test_position_ts_is_utc_aware_and_truncated_to_the_second():
     assert ts.tzinfo is not None and ts.utcoffset() == timedelta(0)
     assert ts == datetime(2026, 10, 2, 10, 18, 47, tzinfo=timezone.utc)
     assert ts.microsecond == 0
+
+
+# --- second source: ingest.from_openwaters (spec section 8 point 13 and section 13) -----------
+
+# Real /v1/stream frames seen on 2026-11-10 (nmea and id shortened).
+OW_POSITION_BODY = {
+    "MessageID": 1, "RepeatIndicator": 0, "UserID": 215435000, "Valid": True,
+    "NavigationalStatus": 5, "RateOfTurn": 0, "Sog": 0, "PositionAccuracy": True,
+    "Longitude": 8.922885, "Latitude": 44.40916333333333, "Cog": 360, "TrueHeading": 341,
+    "Timestamp": 3, "SpecialManoeuvreIndicator": 0, "Spare": 0, "Raim": False,
+    "CommunicationState": 0}
+OW_STATIC_BODY = {
+    "MessageID": 5, "RepeatIndicator": 0, "UserID": 228495900, "Valid": True, "AisVersion": 2,
+    "ImoNumber": 0, "CallSign": "FOZU", "Name": "JIF LEVIATHAN", "Type": 90,
+    "Dimension": {"A": 6, "B": 6, "C": 1, "D": 1}, "FixType": 15,
+    "Eta": {"Month": 0, "Day": 0, "Hour": 0, "Minute": 0}, "MaximumStaticDraught": 0,
+    "Destination": "", "Dte": False, "Spare": False}
+OW_SOURCES = [
+    ("aishub", "aishub-terms",
+     "Open Waters AIS (https://openwaters.io/ais/). AISHub (https://www.aishub.net)"),
+    ("station:ed25519:sFTMPfTZJVC0ka6a3tnOSP9ykFvW3YP5oSKZ9QdzUDo", "CC0-1.0",
+     "Open Waters AIS (https://openwaters.io/ais/)"),
+    ("aisstream", "aisstream-io-terms", "Open Waters AIS (https://openwaters.io/ais/). aisstream.io"),
+]
+
+
+def ow_event(msg_type="PositionReport", body=None, mmsi=215435000, time="2026-11-10T11:40:03Z",
+             source=OW_SOURCES[0]):
+    body = copy.deepcopy(OW_POSITION_BODY if body is None else body)
+    name, license_, attribution = source
+    event = {"type": "event", "id": "aa48", "time": time, "source": name, "license": license_,
+             "attribution": attribution, "station": name, "channel": "",
+             "nmea": ["!AIVDM,..."], "mmsi": mmsi, "msg_type": msg_type,
+             "message": body, "synthesized": True}
+    if msg_type == "PositionReport":
+        event["lat"], event["lon"] = body["Latitude"], body["Longitude"]
+    return event
+
+
+def aisstream_twin(msg_type, body, mmsi, time_utc):
+    """The same AIS message as AISStream would deliver it (envelope of spec section 3)."""
+    meta = {"MMSI": mmsi, "ShipName": "", "latitude": body.get("Latitude", LAT),
+            "longitude": body.get("Longitude", LON), "time_utc": time_utc}
+    return {"MessageType": msg_type, "MetaData": meta,
+            "Message": {msg_type: copy.deepcopy(body)}}
+
+
+def test_from_openwaters_ignores_non_event_frames():
+    for frame in ({"type": "welcome", "limits": {}}, {"type": "error", "error": "bad token"},
+                  {k: v for k, v in ow_event().items() if k != "type"}):
+        assert ingest.from_openwaters(frame) is None, frame.get("type")
+
+
+def test_from_openwaters_event_missing_a_required_field_is_none():
+    for field in ("msg_type", "message", "mmsi", "time"):
+        event = ow_event()
+        del event[field]
+        assert ingest.from_openwaters(event) is None, field
+
+
+def test_from_openwaters_malformed_event_does_not_raise_or_reach_the_db():
+    # Spec: no exception on malformed frames. Whatever it returns, nothing must get past parse.
+    cases = [("time", "not a time"), ("time", 1762774803), ("message", None),
+             ("message", []), ("mmsi", "215435000"), ("msg_type", None)]
+    for field, value in cases:
+        event = ow_event()
+        event[field] = value
+        result = ingest.from_openwaters(event)
+        assert result is None or _parse(result[0]) is None, (field, value)
+
+
+def test_from_openwaters_time_is_written_like_aisstream():
+    msg, _ = ingest.from_openwaters(ow_event(time="2026-11-10T11:40:03Z"))
+    assert msg["MetaData"]["time_utc"] == "2026-11-10 11:40:03 +0000 UTC"
+    # Fractional seconds: .84 rather than the real .34 so rounding up to 15:25:55 is caught;
+    # parse truncates to the second.
+    msg, _ = ingest.from_openwaters(ow_event(time="2026-08-20T15:25:54.842871Z"))
+    ts = _doc(_parse(msg))["ts"]
+    assert ts == datetime(2026, 8, 20, 15, 25, 54, tzinfo=timezone.utc)
+
+
+def test_from_openwaters_info_names_source_license_and_attribution():
+    for name, license_, attribution in OW_SOURCES:
+        _, info = ingest.from_openwaters(ow_event(source=(name, license_, attribution)))
+        assert info == {"source": "openwaters:" + name, "license": license_,
+                        "attribution": attribution}
+    event = ow_event()
+    del event["license"], event["attribution"]
+    _, info = ingest.from_openwaters(event)
+    assert info == {"source": "openwaters:aishub", "license": None, "attribution": None}
+
+
+def test_from_openwaters_parses_like_the_same_message_from_aisstream():
+    # The property of spec section 10: one validation for both feeds.
+    cases = [("PositionReport", OW_POSITION_BODY, 215435000),
+             ("ShipStaticData", OW_STATIC_BODY, 228495900)]
+    for msg_type, body, mmsi in cases:
+        msg, _ = ingest.from_openwaters(ow_event(msg_type, body, mmsi))
+        twin = aisstream_twin(msg_type, body, mmsi, "2026-11-10 11:40:03.512000000 +0000 UTC")
+        expected = _parse(twin)
+        assert expected is not None, msg_type  # else None == None would prove nothing
+        assert _parse(msg) == expected, msg_type
+
+
+# --- second source: ingest.hour_stats (spec section 8 point 13 and section 13) ---------------
+
+HOUR = datetime(2026, 11, 10, 11, tzinfo=timezone.utc)
+FEEDS = ("aisstream", "openwaters")
+
+
+def feed_counts(messages, kept, mmsis):
+    return {"messages": messages, "kept": kept, "mmsis": set(mmsis)}
+
+
+def test_hour_stats_absent_feed_gets_a_zero_document():
+    for present in FEEDS:
+        docs = ingest.hour_stats(HOUR, {present: feed_counts(40, 7, {1, 2})})
+        by_feed = {d["_id"]["feed"]: d for d in docs}
+        assert set(by_feed) == set(FEEDS) and len(docs) == 2, present
+        silent = next(f for f in FEEDS if f != present)
+        assert by_feed[silent] == {"_id": {"hour": HOUR, "feed": silent}, "messages": 0,
+                                   "kept": 0, "vessels": 0, "only": 0}, present
+        assert by_feed[present] == {"_id": {"hour": HOUR, "feed": present}, "messages": 40,
+                                    "kept": 7, "vessels": 2, "only": 2}, present
+    assert [d["messages"] for d in ingest.hour_stats(HOUR, {})] == [0, 0]
+
+
+def test_hour_stats_only_counts_vessels_the_other_feed_missed():
+    counts = {"aisstream": feed_counts(30, 5, {1, 2, 3}),
+              "openwaters": feed_counts(12, 4, {3, 4})}
+    docs = {d["_id"]["feed"]: d for d in ingest.hour_stats(HOUR, counts)}
+    assert (docs["aisstream"]["vessels"], docs["aisstream"]["only"]) == (3, 2)
+    assert (docs["openwaters"]["vessels"], docs["openwaters"]["only"]) == (2, 1)
+    assert (docs["aisstream"]["messages"], docs["aisstream"]["kept"]) == (30, 5)
+    assert (docs["openwaters"]["messages"], docs["openwaters"]["kept"]) == (12, 4)
+
+
+def test_hour_stats_order_is_aisstream_then_openwaters():
+    # counts built in the opposite order, so following the dict order is caught.
+    counts = {"openwaters": feed_counts(1, 1, {9}), "aisstream": feed_counts(2, 1, {8})}
+    assert [d["_id"]["feed"] for d in ingest.hour_stats(HOUR, counts)] == list(FEEDS)
