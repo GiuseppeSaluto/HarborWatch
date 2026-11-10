@@ -28,10 +28,16 @@ def visible_lon_span(zoom):
     return 360 * PHONE_WIDTH_PX / (512 * 2 ** zoom)
 
 
+def assert_centre_in_port(view):
+    lats = [b["lat"] for b in config.BERTHS]
+    assert min(lats) <= view["latitude"] <= max(lats), view
+
+
 @pytest.mark.parametrize("user_agent", [IPHONE_SAFARI, ANDROID_CHROME], ids=["iphone", "android"])
 def test_phone_view_fits_every_berth_in_360_px(user_agent):
     view = app_charts.map_view(user_agent)
     assert {"latitude", "longitude", "zoom"} <= set(view)
+    assert_centre_in_port(view)
     half = visible_lon_span(view["zoom"]) / 2
     left, right = view["longitude"] - half, view["longitude"] + half
     outside = [b["name"] for b in config.BERTHS if not left <= b["lon"] <= right]
@@ -42,6 +48,7 @@ def test_non_phone_view_is_one_and_closer_than_phone():
     views = [app_charts.map_view(ua) for ua in (WINDOWS_CHROME, "", None)]
     for view in views:
         assert {"latitude", "longitude", "zoom"} <= set(view)
+        assert_centre_in_port(view)
     zooms = {view["zoom"] for view in views}
     assert len(zooms) == 1, f"desktop, empty and missing User-Agent differ: {zooms}"
     assert zooms.pop() > app_charts.map_view(IPHONE_SAFARI)["zoom"]
@@ -72,6 +79,10 @@ def test_credits_repeated_parts_appear_once():
     sources = [source("openwaters:aishub", f"{OWA}. {AISHUB}"),
                source("openwaters:station:ed25519:sFTMPfTZJVC0ka6a3tnOSP9ykFvW3YP5oSKZ9QdzUDo", OWA)]
     assert app_charts.credits(sources, SINCE) == f"{OWA} · {AISHUB}"
+    # Parts are compared without a final dot, and shown without it.
+    sources = [source("openwaters:a", f"{OWA}. aisstream.io."),
+               source("openwaters:b", f"{OWA}. aisstream.io")]
+    assert app_charts.credits(sources, SINCE) == f"{OWA} · aisstream.io"
 
 
 def test_credits_order_is_aisstream_then_other_sources_by_id():

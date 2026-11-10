@@ -582,6 +582,10 @@ def test_from_openwaters_malformed_event_does_not_raise_or_reach_the_db():
 def test_from_openwaters_time_is_written_like_aisstream():
     msg, _ = ingest.from_openwaters(ow_event(time="2026-11-10T11:40:03Z"))
     assert msg["MetaData"]["time_utc"] == "2026-11-10 11:40:03 +0000 UTC"
+    # Another offset is converted to UTC; a time without offset counts as UTC.
+    for time in ("2026-11-10T13:40:03+02:00", "2026-11-10T11:40:03"):
+        msg, _ = ingest.from_openwaters(ow_event(time=time))
+        assert msg["MetaData"]["time_utc"] == "2026-11-10 11:40:03 +0000 UTC", time
     # Fractional seconds: .84 rather than the real .34 so rounding up to 15:25:55 is caught;
     # parse truncates to the second.
     msg, _ = ingest.from_openwaters(ow_event(time="2026-08-20T15:25:54.842871Z"))
