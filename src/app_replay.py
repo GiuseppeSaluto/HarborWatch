@@ -9,7 +9,7 @@ icons, colors and tooltip.
 import streamlit as st
 
 import config
-from app_charts import berth_areas
+from app_charts import berth_areas, map_view
 from app_theme import LABELS, colors
 from classify import COMMERCIAL, ship_category
 from icons import ICONS
@@ -41,7 +41,7 @@ def map_style():
         "basemap": BASEMAPS[theme], "states": {s: rgb(c[s]) for s in LABELS}, "labels": LABELS,
         "surface": rgb(c["surface"]), "ink": [255, 255, 255] if theme == "dark" else [11, 11, 11],
         "icons": {k: {key: v[key] for key in ("url", "width", "height", "mask")} for k, v in ICONS.items()},
-        "areas": berth_areas(),
+        "areas": berth_areas(), "view": map_view(st.context.headers.get("User-Agent")),
     }
 
 
@@ -206,7 +206,7 @@ export default async function (component) {
   // The map: created once, then only its layers change.
   if (!hw.map) {
     hw.map = new maplibregl.Map({ container: root.querySelector(".hw-map"), style: style.basemap,
-      center: [8.85, 44.405], zoom: 11.3, attributionControl: { compact: true } });
+      center: [style.view.longitude, style.view.latitude], zoom: style.view.zoom, attributionControl: { compact: true } });
     hw.overlay = new MapboxOverlay({ layers: [], getTooltip: d => hw.tooltip(d),
       onClick: d => { if (d.layer && d.layer.id === "vessels") setStateValue("picked", d.object.mmsi); } });
     hw.map.addControl(hw.overlay);

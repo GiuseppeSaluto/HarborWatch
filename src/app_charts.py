@@ -49,6 +49,16 @@ def rgb(hex_color):
     return [int(hex_color[i:i + 2], 16) for i in (1, 3, 5)]
 
 
+def map_view(user_agent):
+    """The maps' initial view: farther out on a phone, so Pra' and the centre both fit in 360 px.
+
+    "Mobi" is MDN's advice for spotting a phone. Known limit: a tablet or a narrow desktop window
+    is not recognised and crops as before; Streamlit does not tell the screen width.
+    """
+    phone = "Mobi" in (user_agent or "")
+    return {"latitude": 44.405, "longitude": 8.85, "zoom": 10.2 if phone else 11.3}
+
+
 def legend(df):
     """Map legend (HTML, for st.caption): the state colors of the current theme, then the shapes
     of the categories on the map."""
@@ -112,7 +122,7 @@ def port_map(df, tracks_and_spans):
         map_style=None,  # Streamlit's basemap, light or dark with the theme
         # "It is not down on any map; true places never are."
         # Herman Melville, Moby-Dick, Ch. 12
-        initial_view_state=pdk.ViewState(latitude=44.405, longitude=8.85, zoom=11.3),
+        initial_view_state=pdk.ViewState(**map_view(st.context.headers.get("User-Agent"))),
         tooltip={"html": "<b>{title}</b><br>{line1}<br>{line2}"},
         layers=[
             # A faint fill makes the whole ring hoverable: deck.gl only picks drawn pixels, so an
@@ -180,7 +190,7 @@ def gantt(plan, berths, now, names):
         # Every berth labelled in full: Vega would otherwise drop overlapping labels and cut long ones.
         y=alt.Y("berth:N", title=None, scale=alt.Scale(domain=names), sort=names,
                 axis=alt.Axis(labelOverlap=False, labelLimit=220)),
-        color=alt.Color("kind:N", title=None, legend=alt.Legend(orient="top", labelLimit=320),
+        color=alt.Color("kind:N", title=None, legend=alt.Legend(orient="top", direction="vertical", labelLimit=320),
                         scale=alt.Scale(domain=[MOORED, PROPOSED], range=[c["at_berth"], c["anchored"]])),
         tooltip=["vessel:N", "berth:N", "kind:N", alt.Tooltip("from_text:N", title="from"), alt.Tooltip("to_text:N", title="to")],
     ).properties(height=30 * len(berths))
