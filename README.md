@@ -35,7 +35,7 @@ AISStream (WebSocket) ──> ingest.py ──> MongoDB Atlas ──> app.py (St
                                               └──> optimize.py (OR-Tools CP-SAT)
 ```
 
-- **Ingestion** (`src/ingest.py`): an asyncio client subscribes to the port's bounding box on [AISStream](https://aisstream.io), validates every message (AIS uses sentinel values such as latitude 91 for "not available") and writes to MongoDB with PyMongo's async API. It reconnects on its own and flushes its buffers on shutdown.
+- **Ingestion** (`src/ingest.py`): an asyncio client subscribes to the port's bounding box on [AISStream](https://aisstream.io) and, with a token, on [Open Waters AIS](https://openwaters.io/ais/) (two readers feeding one queue and a single writer), validates every message (AIS uses sentinel values such as latitude 91 for "not available") and writes to MongoDB with PyMongo's async API. It reconnects on its own and flushes its buffers on shutdown.
 - **Classification** (`src/classify.py`): a vessel is *underway* above 0.5 knots; otherwise it is *at berth* when within 100 m of the coastline, whose OpenStreetMap trace follows the quay edges in Genoa, and *at anchor* when further out. The AIS ship type separates commercial traffic (cargo, tanker, passenger) from tugs, pilot boats and yachts: during the 2026 Genoa Boat Show dozens of 50-90 m superyachts were moored in port, and length alone could not tell them from cargo ships.
 - **Storage under free-tier limits**: MongoDB Atlas M0 allows 512 MB and 100 operations per second. Positions are sampled to one per vessel per minute, written in batches every 10 seconds, and expire after 7 days through a TTL index. The ingestion logs the used and projected storage (about 57 MB at steady state, measured).
 - **State history**: each vessel's current state is upserted with the time it began, computed inside MongoDB with a pipeline update so that it survives restarts. After a gap in the data the start time is reset and flagged as "not seen", instead of silently counting the gap as waiting time.
@@ -48,7 +48,7 @@ Requirements: Python 3.12+, a free [AISStream](https://aisstream.io) API key, an
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env           # then fill in AISSTREAM_API_KEY and MONGODB_URI
+cp .env.example .env           # then fill in AISSTREAM_API_KEY and MONGODB_URI (OPENWATERS_TOKEN optional)
 ./run.sh
 ```
 
@@ -93,7 +93,7 @@ run.sh      ingestion + dashboard, or the dashboard alone
 
 ## Data
 
-- Vessel positions: [AISStream](https://aisstream.io) live AIS feed.
+- Vessel positions: [AISStream](https://aisstream.io) live AIS feed and, in parallel when `OPENWATERS_TOKEN` is set, [Open Waters AIS (https://openwaters.io/ais/)](https://openwaters.io/ais/), an open network of volunteer receivers and aggregators. Each position keeps its source, and the dashboard credits every source it shows data from, with the attribution that source asks for.
 - `data/sample/` holds one week of collected data (hourly congestion, stays, vessels, and one day of positions) for demonstration, non-commercial use; see its [README](data/sample/README.md).
 - `data/coastline.json` is the OpenStreetMap coastline around the port, © OpenStreetMap contributors, available under the [ODbL](https://www.openstreetmap.org/copyright).
 - `data/berths.json` combines quay lengths published by the [Port Authority of Genoa](https://www.portsofgenoa.com) with values observed in the collected data, as noted in each entry.

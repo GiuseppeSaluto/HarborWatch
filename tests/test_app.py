@@ -46,7 +46,14 @@ def history_calls():
 
 
 @pytest.fixture
-def open_dashboard(monkeypatch, status_calls, replay_calls, replay_failure, history_calls):
+def data_sources():
+    """The documents the patched data_sources() returns: none unless a test adds some."""
+    return []
+
+
+@pytest.fixture
+def open_dashboard(monkeypatch, status_calls, replay_calls, replay_failure, history_calls,
+                   data_sources):
     """Patch the loaders by name and run the dashboard.
 
     `replay` replaces replay_positions(); `available` replaces replay_available(), by default
@@ -95,6 +102,7 @@ def open_dashboard(monkeypatch, status_calls, replay_calls, replay_failure, hist
         monkeypatch.setattr(app, "replay_positions", replay_positions, raising=False)
         monkeypatch.setattr(app, "replay_available", lambda: available, raising=False)
         monkeypatch.setattr(app, "vessel_static", lambda: REPLAY_STATIC, raising=False)
+        monkeypatch.setattr(app, "data_sources", lambda: list(data_sources), raising=False)
         monkeypatch.setattr(app, "load_states", load_states)
         monkeypatch.setattr(app, "recent_tracks", recent_tracks)
         monkeypatch.setattr(app, "get_db", lambda: None)
@@ -640,3 +648,58 @@ def test_replay_without_vessels_at_t_keeps_the_component_so_t_can_move(open_dash
     assert not app.exception
     assert app.metric
     assert not any("No vessel heard from" in text for text in card_texts(app))
+
+
+# --- Data credits in the footer (spec section 8 point 13, "Attribuzione") -------------------
+
+def footer(app):
+    lines = [c.value for c in app.caption if "map © OpenStreetMap contributors" in c.value]
+    assert len(lines) == 1, lines
+    return lines[0]
+
+
+def source_docs(heard):
+    """An AISStream doc, an Open Waters station doc and an old feed, last heard at heard[_id]."""
+    return [dict(_id="openwaters:genoa", feed="openwaters", license="openwaters-terms",
+                 attribution="Open Waters AIS (https://openwaters.io/ais/)",
+                 last_message=heard["openwaters:genoa"]),
+            dict(_id="aisstream", feed="aisstream", license="aisstream-io-terms",
+                 attribution="AISStream (https://aisstream.io)", last_message=heard["aisstream"]),
+            dict(_id="oldfeed", feed="oldfeed", license="old-terms",
+                 attribution="Old Feed (https://old.example)", last_message=heard["oldfeed"])]
+
+
+def too_old():
+    from datetime import UTC, datetime, timedelta
+
+    import config
+
+    return datetime.now(UTC) - timedelta(days=config.POSITIONS_TTL_DAYS, hours=1)
+
+
+def test_footer_credits_recent_sources_in_live_and_replay(open_dashboard, data_sources):
+    from datetime import UTC, datetime, timedelta
+
+    recent = datetime.now(UTC) - timedelta(minutes=1)
+    data_sources.extend(source_docs({"aisstream": recent, "openwaters:genoa": recent,
+                                     "oldfeed": too_old()}))
+    expected = " · Data: AISStream (https://aisstream.io) · Open Waters AIS (https://openwaters.io/ais/)"
+    app = open_dashboard()
+    assert not app.exception
+    for mode in ("Live", "Replay"):
+        if mode == "Replay":
+            switch_to_replay(app)
+        line = footer(app)
+        assert expected in line, (mode, line)
+        assert "Old Feed" not in line, (mode, line)
+
+
+def test_footer_has_no_data_credits_without_recent_sources(open_dashboard, data_sources):
+    old = too_old()
+    for docs in ([], source_docs({"aisstream": old, "openwaters:genoa": old, "oldfeed": old})):
+        data_sources[:] = docs
+        app = open_dashboard()
+        assert not app.exception
+        assert "Data:" not in footer(app), docs
+        switch_to_replay(app)
+        assert "Data:" not in footer(app), docs

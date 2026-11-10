@@ -10,7 +10,7 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 
 import config
-from app_charts import chart_time, congestion_chart, fmt, fmt_age, gantt, legend, local, port_map, vessel_name
+from app_charts import chart_time, congestion_chart, credits, fmt, fmt_age, gantt, legend, local, port_map, vessel_name
 from app_theme import ICONS, LABELS, RUNNING_ICON_CSS, header_grid_css, state_card_css
 from classify import COMMERCIAL, ship_category
 from diagnostics import diagnose, probe_stream
@@ -140,7 +140,22 @@ def dashboard():
 
     st.caption(f"{'Replay at' if replay else 'Updated'} {local(now):%H:%M:%S %Z} · vessels heard from in the last {config.STALE_MINUTES} min · "
                f"{hidden} other vessels hidden (tugs, yachts, service craft, or type not received yet) · "
-               "map © OpenStreetMap contributors")
+               "map © OpenStreetMap contributors" + data_credits())
+
+
+def data_credits():
+    """ · Data: and the credits of the sources heard in the last POSITIONS_TTL_DAYS, or nothing."""
+    text = credits(data_sources(), datetime.now(UTC) - timedelta(days=config.POSITIONS_TTL_DAYS))
+    return f" · Data: {text}" if text else ""
+
+
+@st.cache_data(ttl=60)  # the Status shows each feed's last message: keep it fresh
+def data_sources():
+    """Each AIS source's attribution and last message, as the ingestion writes them."""
+    try:
+        return list(get_db().sources.find())
+    except ConnectionFailure:  # the page says Atlas is down elsewhere
+        return []
 
 
 @st.cache_data(ttl=60)
@@ -335,7 +350,17 @@ def data_numbers(age, stopped):
                         "otherwise it uses the default.")
     cols[1].metric("Atlas storage", f"{used_mb:.1f} MB", help=f"of {config.STORAGE_LIMIT_MB} MB "
                    f"({100 * used_mb / config.STORAGE_LIMIT_MB:.1f}%); the TTL keeps it near ~57 MB")
+    # One metric per feed the ingestion has heard: its latest message from any of its sources.
+    feeds = {}
+    for s in data_sources():
+        feeds[s["feed"]] = max(feeds.get(s["feed"], s["last_message"]), s["last_message"])
+    if feeds:
+        now = pd.Timestamp(datetime.now(UTC))
+        for col, (feed, name) in zip(st.columns(2), [(f, n) for f, n in FEED_NAMES.items() if f in feeds]):
+            col.metric(name, fmt_age(now - pd.Timestamp(feeds[feed])), help=f"Last message received from {name}")
 
+
+FEED_NAMES = {"aisstream": "AISStream", "openwaters": "Open Waters"}
 
 # Badge per diagnosis: (label, icon, color). Status colors as in the data badge: green when fine,
 # orange for external causes we can only wait out, red for links we can fix, gray when unknown.
