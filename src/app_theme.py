@@ -82,7 +82,9 @@ def vessel_detail_css(state):
     c = colors()
     accent = c.get(state, c["underway"])
     return f"""<style>
-    .st-key-vessel-detail {{border-top: 3px solid {accent};}}
+    /* Fades out at both ends, so the straight line does not run past the search box's rounded corners. */
+    .st-key-vessel-detail {{border-top: 3px solid {accent};
+        border-image: linear-gradient(to right, transparent, {accent} 2rem, {accent} calc(100% - 2rem), transparent) 1;}}
     .st-key-vessel-detail [data-testid=stMetricValue] {{font-size: 1.4rem; font-variant-numeric: tabular-nums;}}
     .st-key-vessel-detail [data-testid=stMetricLabel] {{font-size: .8rem;}}
     .st-key-vessel-detail h3 {{padding-top: 0; letter-spacing: -.025em;}}
